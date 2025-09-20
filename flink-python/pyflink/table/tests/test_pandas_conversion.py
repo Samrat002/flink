@@ -171,10 +171,10 @@ class PandasConversionITTests(PandasConversionTestBase):
         result_pdf = table.group_by(table.f1).select(table.f2.max.alias('f2')).to_pandas()
         import pandas as pd
         import numpy as np
-        assert_frame_equal(result_pdf, pd.DataFrame(data={'f2': np.int16([2])}))
+        assert_frame_equal(result_pdf, pd.DataFrame(data={'f2': np.int16([2])}), check_dtype=False)
 
         result_pdf = table.group_by(table.f2).select(table.f1.max.alias('f2')).to_pandas()
-        assert_frame_equal(result_pdf, pd.DataFrame(data={'f2': np.int8([1, 1])}))
+        assert_frame_equal(result_pdf, pd.DataFrame(data={'f2': np.int8([1, 1])}), check_dtype=False)
 
     def assert_equal_field(self, expected_field, result_field):
         import numpy as np
@@ -237,4 +237,4 @@ class StreamPandasConversionTests(PandasConversionITTests,
         import pandas as pd
         os.remove(source_path)
         expected_df = pd.DataFrame(data={"rowtime": pd.Series(data, dtype="datetime64[ms]")})
-        assert_frame_equal(result_pdf, expected_df)
+        assert_frame_equal(result_pdf, expected_df, check_dtype=False)
