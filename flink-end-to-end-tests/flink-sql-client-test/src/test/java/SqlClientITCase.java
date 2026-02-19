@@ -83,7 +83,8 @@ public class SqlClientITCase {
             new KafkaContainer(DockerImageName.parse(DockerImageVersions.KAFKA))
                     .withNetwork(NETWORK)
                     .withNetworkAliases(INTER_CONTAINER_KAFKA_ALIAS)
-                    .withLogConsumer(LOG_CONSUMER);
+                    .withLogConsumer(LOG_CONSUMER)
+                    .withStartupTimeout(Duration.ofMinutes(5));
 
     public final FlinkContainers flink =
             FlinkContainers.builder()
