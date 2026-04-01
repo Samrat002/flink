@@ -31,16 +31,32 @@ import org.apache.flink.util.Preconditions;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import javax.annotation.Nullable;
+
 import java.io.IOException;
 import java.net.URI;
 import java.time.Duration;
+import java.util.concurrent.TimeUnit;
 
 /**
- * Factory for creating Native S3 FileSystem instances.
+ * Factory for creating Native S3 FileSystem instances using AWS SDK v2.
  *
- * <p>This factory creates {@link NativeS3FileSystem} instances for accessing Amazon S3 buckets
- * using AWS SDK v2. The Native S3 FileSystem provides a drop-in replacement for Presto and Hadoop
- * S3 implementations with minimal external dependencies.
+ * <h3>Bucket-Level Configuration</h3>
+ *
+ * <p>Supports per-bucket configuration overrides using the format {@code
+ * s3.bucket.<bucket-name>.<property>}. Bucket-level settings override global settings; unset
+ * properties inherit global values. Supported properties:
+ *
+ * <ul>
+ *   <li>{@code region} - AWS region for this bucket
+ *   <li>{@code endpoint} - custom S3 endpoint
+ *   <li>{@code path-style-access} - use path-style S3 access
+ *   <li>{@code access-key} / {@code secret-key} - bucket-specific credentials
+ *   <li>{@code sse.type} / {@code sse.kms-key-id} - server-side encryption
+ *   <li>{@code assume-role.arn} / {@code assume-role.external-id} / {@code
+ *       assume-role.session-name} / {@code assume-role.session-duration} - IAM assume role
+ *   <li>{@code credentials.provider} - custom credentials provider class
+ * </ul>
  *
  * @see NativeS3FileSystem
  * @see org.apache.flink.core.fs.FileSystemFactory
@@ -190,15 +206,14 @@ public class NativeS3FileSystemFactory implements FileSystemFactory {
                                     + "Example: 'arn:aws:kms:us-east-1:123456789:key/12345678-1234-1234-1234-123456789abc' "
                                     + "or 'alias/my-s3-key'");
 
-    // IAM Assume Role Configuration
     public static final ConfigOption<String> ASSUME_ROLE_ARN =
             ConfigOptions.key("s3.assume-role.arn")
                     .stringType()
                     .noDefaultValue()
                     .withDescription(
                             "ARN of the IAM role to assume for S3 access. "
-                                    + "Enables cross-account access or temporary elevated permissions. "
-                                    + "Example: 'arn:aws:iam::123456789012:role/S3AccessRole'");
+                                    + "Examples: 'arn:aws:iam::123456789012:role/S3AccessRole' (aws), "
+                                    + "'arn:aws-cn:iam::123456789012:role/S3AccessRole' (aws-cn)");
 
     public static final ConfigOption<String> ASSUME_ROLE_EXTERNAL_ID =
             ConfigOptions.key("s3.assume-role.external-id")
@@ -216,7 +231,7 @@ public class NativeS3FileSystemFactory implements FileSystemFactory {
     public static final ConfigOption<Integer> ASSUME_ROLE_SESSION_DURATION_SECONDS =
             ConfigOptions.key("s3.assume-role.session-duration")
                     .intType()
-                    .defaultValue(3600) // 1 hour default
+                    .defaultValue(3600)
                     .withDescription(
                             "Duration in seconds for the assumed role session (900-43200 seconds, default: 3600)");
 
@@ -280,14 +295,14 @@ public class NativeS3FileSystemFactory implements FileSystemFactory {
                                     + "When not set, the default chain is used: delegation tokens -> "
                                     + "static credentials (if configured) -> DefaultCredentialsProvider.");
 
-    private Configuration flinkConfig;
+    private volatile Configuration flinkConfig;
+    @Nullable private volatile BucketConfigProvider bucketConfigProvider;
 
     @Override
     public String getScheme() {
         return "s3";
     }
 
-    // setting to least priority so that it is not used by default
     @Override
     public int getPriority() {
         return -1;
@@ -296,6 +311,7 @@ public class NativeS3FileSystemFactory implements FileSystemFactory {
     @Override
     public void configure(Configuration config) {
         this.flinkConfig = config;
+        this.bucketConfigProvider = new BucketConfigProvider(config);
     }
 
     @Override
@@ -310,9 +326,51 @@ public class NativeS3FileSystemFactory implements FileSystemFactory {
         String region = config.get(REGION);
         String endpoint = config.get(ENDPOINT);
         boolean pathStyleAccess = config.get(PATH_STYLE_ACCESS);
+        String sseType = config.get(SSE_TYPE);
+        String sseKmsKeyId = config.get(SSE_KMS_KEY_ID);
+        String assumeRoleArn = config.get(ASSUME_ROLE_ARN);
+        String assumeRoleExternalId = config.get(ASSUME_ROLE_EXTERNAL_ID);
+        String assumeRoleSessionName = config.get(ASSUME_ROLE_SESSION_NAME);
+        int assumeRoleSessionDuration = config.get(ASSUME_ROLE_SESSION_DURATION_SECONDS);
+        String credentialsProviderClasses = config.get(AWS_CREDENTIALS_PROVIDER);
 
-        S3EncryptionConfig encryptionConfig =
-                S3EncryptionConfig.fromConfig(config.get(SSE_TYPE), config.get(SSE_KMS_KEY_ID));
+        // Apply bucket-specific overrides
+        String bucketName = fsUri.getHost();
+        if (bucketName == null || bucketName.isEmpty()) {
+            throw new IOException("Invalid S3 URI: missing or empty bucket name in URI: " + fsUri);
+        }
+        if (bucketConfigProvider != null) {
+            S3BucketConfig overrides = bucketConfigProvider.getBucketConfig(bucketName);
+            if (overrides != null) {
+                LOG.debug(
+                        "Applying bucket-specific configuration for bucket '{}': {}",
+                        bucketName,
+                        overrides);
+                accessKey = firstNonNull(overrides.getAccessKey(), accessKey);
+                secretKey = firstNonNull(overrides.getSecretKey(), secretKey);
+                region = firstNonNull(overrides.getRegion(), region);
+                endpoint = firstNonNull(overrides.getEndpoint(), endpoint);
+                sseType = firstNonNull(overrides.getSseType(), sseType);
+                sseKmsKeyId = firstNonNull(overrides.getSseKmsKeyId(), sseKmsKeyId);
+                assumeRoleArn = firstNonNull(overrides.getAssumeRoleArn(), assumeRoleArn);
+                assumeRoleExternalId =
+                        firstNonNull(overrides.getAssumeRoleExternalId(), assumeRoleExternalId);
+                assumeRoleSessionName =
+                        firstNonNull(overrides.getAssumeRoleSessionName(), assumeRoleSessionName);
+                credentialsProviderClasses =
+                        firstNonNull(
+                                overrides.getCredentialsProvider(), credentialsProviderClasses);
+                if (overrides.getPathStyleAccess() != null) {
+                    pathStyleAccess = overrides.getPathStyleAccess();
+                }
+                if (overrides.getAssumeRoleSessionDurationSeconds() != null) {
+                    assumeRoleSessionDuration = overrides.getAssumeRoleSessionDurationSeconds();
+                }
+            }
+        }
+
+        S3EncryptionConfig encryptionConfig = S3EncryptionConfig.fromConfig(sseType, sseKmsKeyId);
+
         String entropyInjectionKey = config.get(ENTROPY_INJECT_KEY_OPTION);
         int numEntropyChars = -1;
         if (entropyInjectionKey != null) {
@@ -337,7 +395,6 @@ public class NativeS3FileSystemFactory implements FileSystemFactory {
         final long s3minPartSize = config.get(PART_UPLOAD_MIN_SIZE);
         final int maxConcurrentUploads = config.get(MAX_CONCURRENT_UPLOADS);
 
-        // Validate part size: S3 requires minimum 5MB and maximum 5GB per part
         Preconditions.checkArgument(
                 s3minPartSize >= S3_MULTIPART_MIN_PART_SIZE,
                 "%s must be at least 5MB (5242880 bytes), but was %d bytes",
@@ -356,8 +413,6 @@ public class NativeS3FileSystemFactory implements FileSystemFactory {
 
         boolean useAsyncOperations = config.get(USE_ASYNC_OPERATIONS);
 
-        // Validate and clamp read buffer size to sensible range [64KB, 4MB]
-        // We clip rather than throw to provide flexibility while preventing extreme values
         int configuredReadBufferSize = config.get(READ_BUFFER_SIZE);
         int readBufferSize =
                 Math.max(64 * 1024, Math.min(configuredReadBufferSize, 4 * 1024 * 1024));
@@ -390,42 +445,58 @@ public class NativeS3FileSystemFactory implements FileSystemFactory {
                         .socketTimeout(config.get(SOCKET_TIMEOUT))
                         .connectionMaxIdleTime(config.get(CONNECTION_MAX_IDLE_TIME))
                         .clientCloseTimeout(config.get(CLIENT_CLOSE_TIMEOUT))
-                        .assumeRoleArn(config.get(ASSUME_ROLE_ARN))
-                        .assumeRoleExternalId(config.get(ASSUME_ROLE_EXTERNAL_ID))
-                        .assumeRoleSessionName(config.get(ASSUME_ROLE_SESSION_NAME))
-                        .assumeRoleSessionDurationSeconds(
-                                config.get(ASSUME_ROLE_SESSION_DURATION_SECONDS))
+                        .assumeRoleArn(assumeRoleArn)
+                        .assumeRoleExternalId(assumeRoleExternalId)
+                        .assumeRoleSessionName(assumeRoleSessionName)
+                        .assumeRoleSessionDurationSeconds(assumeRoleSessionDuration)
                         .maxRetries(config.get(MAX_RETRIES))
-                        .credentialsProviderClasses(config.get(AWS_CREDENTIALS_PROVIDER))
+                        .credentialsProviderClasses(credentialsProviderClasses)
                         .encryptionConfig(encryptionConfig)
                         .build();
 
-        NativeS3BulkCopyHelper bulkCopyHelper = null;
-        if (config.get(BULK_COPY_ENABLED)) {
-            final int bulkCopyMaxConcurrent = config.get(BULK_COPY_MAX_CONCURRENT);
-            Preconditions.checkArgument(
-                    bulkCopyMaxConcurrent > 0,
-                    "'%s' must be a positive integer, but was %s",
-                    BULK_COPY_MAX_CONCURRENT.key(),
-                    bulkCopyMaxConcurrent);
-            bulkCopyHelper =
-                    new NativeS3BulkCopyHelper(
-                            clientProvider.getTransferManager(),
-                            bulkCopyMaxConcurrent,
-                            maxConnections);
-        }
+        try {
+            NativeS3BulkCopyHelper bulkCopyHelper = null;
+            if (config.get(BULK_COPY_ENABLED)) {
+                final int bulkCopyMaxConcurrent = config.get(BULK_COPY_MAX_CONCURRENT);
+                Preconditions.checkArgument(
+                        bulkCopyMaxConcurrent > 0,
+                        "'%s' must be a positive integer, but was %s",
+                        BULK_COPY_MAX_CONCURRENT.key(),
+                        bulkCopyMaxConcurrent);
+                bulkCopyHelper =
+                        new NativeS3BulkCopyHelper(
+                                clientProvider.getTransferManager(),
+                                bulkCopyMaxConcurrent,
+                                maxConnections);
+            }
 
-        return new NativeS3FileSystem(
-                clientProvider,
-                fsUri,
-                entropyInjectionKey,
-                numEntropyChars,
-                localTmpDirectory,
-                s3minPartSize,
-                maxConcurrentUploads,
-                bulkCopyHelper,
-                useAsyncOperations,
-                readBufferSize,
-                config.get(FS_CLOSE_TIMEOUT));
+            return new NativeS3FileSystem(
+                    clientProvider,
+                    fsUri,
+                    entropyInjectionKey,
+                    numEntropyChars,
+                    localTmpDirectory,
+                    s3minPartSize,
+                    maxConcurrentUploads,
+                    bulkCopyHelper,
+                    useAsyncOperations,
+                    readBufferSize,
+                    config.get(FS_CLOSE_TIMEOUT));
+        } catch (Exception e) {
+            try {
+                clientProvider.closeAsync().get(30, TimeUnit.SECONDS);
+            } catch (Exception closeEx) {
+                e.addSuppressed(closeEx);
+            }
+            if (e instanceof IOException) {
+                throw (IOException) e;
+            }
+            throw new IOException("Failed to create NativeS3FileSystem for " + fsUri, e);
+        }
+    }
+
+    @Nullable
+    private static <T> T firstNonNull(@Nullable T override, @Nullable T base) {
+        return override != null ? override : base;
     }
 }
