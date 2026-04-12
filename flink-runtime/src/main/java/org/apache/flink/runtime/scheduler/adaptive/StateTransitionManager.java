@@ -89,5 +89,24 @@ public interface StateTransitionManager {
          * @return the {@link JobID} of the job
          */
         JobID getJobId();
+
+        /**
+         * Requests the context to actively trigger a checkpoint to expedite rescaling. Called by
+         * the {@link DefaultStateTransitionManager} from within phase lifecycle methods:
+         *
+         * <ul>
+         *   <li>On entering {@link DefaultStateTransitionManager.Stabilizing} (to overlap
+         *       checkpoint with the stabilization wait)
+         *   <li>On each {@link DefaultStateTransitionManager.Stabilizing#onChange} event (retry if
+         *       a previous trigger was skipped)
+         *   <li>On entering {@link DefaultStateTransitionManager.Stabilized} (fallback if no
+         *       checkpoint completed during stabilization)
+         * </ul>
+         *
+         * <p>The implementation decides whether to actually trigger based on its own guard
+         * conditions (e.g., checkpointing enabled, no checkpoint in progress, config flag).
+         * Multiple calls are safe; guards prevent redundant triggers.
+         */
+        default void requestActiveCheckpointTrigger() {}
     }
 }

@@ -1997,6 +1997,21 @@ public class CheckpointCoordinator {
     }
 
     /**
+     * Returns {@code -1} if a checkpoint is already in flight, otherwise the remaining time (in ms)
+     * until {@code minPauseBetweenCheckpoints} is satisfied ({@code 0} = trigger now). All checks
+     * are made under the coordinator lock.
+     */
+    public long getActiveCheckpointTriggerDelay() {
+        synchronized (lock) {
+            if (isTriggering || !pendingCheckpoints.isEmpty()) {
+                return -1L;
+            }
+            final long elapsed = clock.relativeTimeMillis() - lastCheckpointCompletionRelativeTime;
+            return Math.max(0L, minPauseBetweenCheckpoints - elapsed);
+        }
+    }
+
+    /**
      * @deprecated use {@link #getNumQueuedRequests()}
      */
     @Deprecated

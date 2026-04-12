@@ -18,9 +18,11 @@
 
 package org.apache.flink.runtime.scheduler.adaptive;
 
+import org.apache.flink.api.common.JobID;
 import org.apache.flink.api.common.JobStatus;
 import org.apache.flink.core.execution.SavepointFormatType;
 import org.apache.flink.runtime.JobException;
+import org.apache.flink.runtime.checkpoint.CheckpointCoordinator;
 import org.apache.flink.runtime.checkpoint.CheckpointScheduling;
 import org.apache.flink.runtime.checkpoint.CheckpointStatsListener;
 import org.apache.flink.runtime.checkpoint.CompletedCheckpoint;
@@ -40,6 +42,7 @@ import org.apache.flink.runtime.scheduler.exceptionhistory.ExceptionHistoryEntry
 import org.apache.flink.runtime.scheduler.stopwithsavepoint.StopWithSavepointTerminationManager;
 import org.apache.flink.util.ExceptionUtils;
 import org.apache.flink.util.Preconditions;
+import org.apache.flink.util.concurrent.FutureUtils;
 
 import org.slf4j.Logger;
 
@@ -64,6 +67,8 @@ class Executing extends StateWithExecutionGraph
 
     private final StateTransitionManager stateTransitionManager;
     private final int rescaleOnFailedCheckpointCount;
+    private final boolean activeCheckpointTriggerEnabled;
+    private boolean activeCheckpointTriggerScheduled;
     // null indicates that there was no change event observed, yet
     @Nullable private AtomicInteger failedCheckpointCountdown;
 
@@ -77,7 +82,8 @@ class Executing extends StateWithExecutionGraph
             List<ExceptionHistoryEntry> failureCollection,
             Function<StateTransitionManager.Context, StateTransitionManager>
                     stateTransitionManagerFactory,
-            int rescaleOnFailedCheckpointCount) {
+            int rescaleOnFailedCheckpointCount,
+            boolean activeCheckpointTriggerEnabled) {
         super(
                 context,
                 executionGraph,
@@ -96,6 +102,7 @@ class Executing extends StateWithExecutionGraph
                 rescaleOnFailedCheckpointCount > 0,
                 "The rescaleOnFailedCheckpointCount should be larger than 0.");
         this.rescaleOnFailedCheckpointCount = rescaleOnFailedCheckpointCount;
+        this.activeCheckpointTriggerEnabled = activeCheckpointTriggerEnabled;
         this.failedCheckpointCountdown = null;
 
         recordRescaleForJobIntoExecuting(logger, context);
@@ -180,6 +187,103 @@ class Executing extends StateWithExecutionGraph
     @Override
     public ScheduledFuture<?> scheduleOperation(Runnable callback, Duration delay) {
         return context.runIfState(this, callback, delay);
+    }
+
+    @Override
+    public void requestActiveCheckpointTrigger() {
+        if (!activeCheckpointTriggerEnabled) {
+            return;
+        }
+
+        final CheckpointCoordinator checkpointCoordinator =
+                getExecutionGraph().getCheckpointCoordinator();
+        if (!shouldTriggerActiveCheckpoint(checkpointCoordinator)) {
+            return;
+        }
+
+        final long triggerDelayMillis = checkpointCoordinator.getActiveCheckpointTriggerDelay();
+        if (triggerDelayMillis < 0L) {
+            getLogger()
+                    .debug(
+                            "Skipping active checkpoint trigger for rescale: checkpoint already in progress.");
+            return;
+        }
+        if (triggerDelayMillis > 0L) {
+            scheduleActiveCheckpointTriggerRetry(triggerDelayMillis);
+            return;
+        }
+        fireActiveCheckpointTrigger(checkpointCoordinator);
+    }
+
+    private boolean shouldTriggerActiveCheckpoint(
+            @Nullable CheckpointCoordinator checkpointCoordinator) {
+        if (checkpointCoordinator == null
+                || !checkpointCoordinator.isPeriodicCheckpointingConfigured()) {
+            getLogger()
+                    .debug(
+                            "Skipping active checkpoint trigger for rescale: checkpointing not configured.");
+            return false;
+        }
+        if (!parallelismChanged()) {
+            getLogger()
+                    .debug(
+                            "Skipping active checkpoint trigger for rescale: parallelism unchanged.");
+            return false;
+        }
+        return true;
+    }
+
+    private void scheduleActiveCheckpointTriggerRetry(long delayMillis) {
+        if (activeCheckpointTriggerScheduled) {
+            return;
+        }
+        activeCheckpointTriggerScheduled = true;
+        getLogger()
+                .debug(
+                        "Min pause not satisfied, scheduling active checkpoint trigger retry in {} ms.",
+                        delayMillis);
+        context.runIfState(
+                this, this::tryFireActiveCheckpointAfterRetry, Duration.ofMillis(delayMillis));
+    }
+
+    private void tryFireActiveCheckpointAfterRetry() {
+        activeCheckpointTriggerScheduled = false;
+        final CheckpointCoordinator checkpointCoordinator =
+                getExecutionGraph().getCheckpointCoordinator();
+        if (!shouldTriggerActiveCheckpoint(checkpointCoordinator)) {
+            return;
+        }
+        if (checkpointCoordinator.getActiveCheckpointTriggerDelay() == 0L) {
+            fireActiveCheckpointTrigger(checkpointCoordinator);
+        }
+    }
+
+    private void fireActiveCheckpointTrigger(CheckpointCoordinator checkpointCoordinator) {
+        Preconditions.checkState(
+                activeCheckpointTriggerEnabled,
+                "Active checkpoint trigger fired while the feature is disabled.");
+        activeCheckpointTriggerScheduled = false;
+        final JobID jobId = getExecutionGraph().getJobID();
+        getLogger().info("Actively triggering checkpoint to expedite rescaling, job {}.", jobId);
+        // isPeriodic=false: min-pause is enforced above via getActiveCheckpointTriggerDelay.
+        FutureUtils.assertNoException(
+                checkpointCoordinator
+                        .triggerCheckpoint(false)
+                        .handle(
+                                (completedCheckpoint, throwable) -> {
+                                    if (throwable != null) {
+                                        getLogger()
+                                                .warn(
+                                                        "Active checkpoint trigger for rescale failed.",
+                                                        throwable);
+                                    } else {
+                                        getLogger()
+                                                .info(
+                                                        "Active checkpoint for rescale completed successfully: {}.",
+                                                        completedCheckpoint.getCheckpointID());
+                                    }
+                                    return null;
+                                }));
     }
 
     @Override
@@ -399,6 +503,7 @@ class Executing extends StateWithExecutionGraph
         private final Function<StateTransitionManager.Context, StateTransitionManager>
                 stateTransitionManagerFactory;
         private final int rescaleOnFailedCheckpointCount;
+        private final boolean activeCheckpointTriggerEnabled;
 
         Factory(
                 ExecutionGraph executionGraph,
@@ -410,7 +515,8 @@ class Executing extends StateWithExecutionGraph
                 List<ExceptionHistoryEntry> failureCollection,
                 Function<StateTransitionManager.Context, StateTransitionManager>
                         stateTransitionManagerFactory,
-                int rescaleOnFailedCheckpointCount) {
+                int rescaleOnFailedCheckpointCount,
+                boolean activeCheckpointTriggerEnabled) {
             this.context = context;
             this.log = log;
             this.executionGraph = executionGraph;
@@ -420,6 +526,7 @@ class Executing extends StateWithExecutionGraph
             this.failureCollection = failureCollection;
             this.stateTransitionManagerFactory = stateTransitionManagerFactory;
             this.rescaleOnFailedCheckpointCount = rescaleOnFailedCheckpointCount;
+            this.activeCheckpointTriggerEnabled = activeCheckpointTriggerEnabled;
         }
 
         public Class<Executing> getStateClass() {
@@ -436,7 +543,8 @@ class Executing extends StateWithExecutionGraph
                     userCodeClassLoader,
                     failureCollection,
                     stateTransitionManagerFactory,
-                    rescaleOnFailedCheckpointCount);
+                    rescaleOnFailedCheckpointCount,
+                    activeCheckpointTriggerEnabled);
         }
     }
 }
