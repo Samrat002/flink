@@ -164,6 +164,10 @@ public class DefaultStateTransitionManager implements RescaleContext, StateTrans
         progressToPhase(new Stabilized(clock, this, firstChangeEventTimestamp, maxTriggerDelay));
     }
 
+    void requestActiveCheckpointTrigger() {
+        transitionContext.requestActiveCheckpointTrigger();
+    }
+
     private void triggerTransitionToSubsequentState() {
         progressToPhase(new Transitioning(clock, this));
         transitionContext.transitionToSubsequentState();
@@ -362,6 +366,7 @@ public class DefaultStateTransitionManager implements RescaleContext, StateTrans
                     resourceStabilizationTimeout);
 
             scheduleTransitionEvaluation();
+            context().requestActiveCheckpointTrigger();
         }
 
         @Override
@@ -370,6 +375,7 @@ public class DefaultStateTransitionManager implements RescaleContext, StateTrans
             // event was already handled by a onTrigger callback with a no-op
             onChangeEventTimestamp = now();
             scheduleTransitionEvaluation();
+            context().requestActiveCheckpointTrigger();
         }
 
         @Override
@@ -427,6 +433,7 @@ public class DefaultStateTransitionManager implements RescaleContext, StateTrans
                     },
                     firstChangeEventTimestamp,
                     maxTriggerDelay);
+            context().requestActiveCheckpointTrigger();
         }
 
         @Override
