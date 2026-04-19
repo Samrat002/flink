@@ -21,6 +21,9 @@ package org.apache.flink.fs.s3native;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
+import software.amazon.awssdk.core.exception.SdkClientException;
+
+import java.util.Collections;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatNullPointerException;
@@ -28,7 +31,9 @@ import static org.assertj.core.api.Assertions.assertThatNullPointerException;
 /** Tests for {@link NativeS3BulkCopyHelper}. */
 class NativeS3BulkCopyHelperTest {
 
-    private static final NativeS3BulkCopyHelper helper = new NativeS3BulkCopyHelper(null, 1);
+    private static final NativeS3BulkCopyHelper helper = new NativeS3BulkCopyHelper(null, 1, 1);
+
+    // --- URI parsing tests ---
 
     @ParameterizedTest
     @CsvSource({
@@ -104,5 +109,43 @@ class NativeS3BulkCopyHelperTest {
         }
         path.append("file.txt");
         assertThat(helper.extractKey("s3://bucket/" + path)).isEqualTo(path.toString());
+    }
+
+    @Test
+    void testConnectionPoolExhaustedDetection() {
+        assertThat(
+                        NativeS3BulkCopyHelper.isConnectionPoolExhausted(
+                                SdkClientException.builder()
+                                        .message(
+                                                "Unable to execute HTTP request: "
+                                                        + "Acquire operation took longer than the configured maximum time.")
+                                        .build()))
+                .isTrue();
+        assertThat(
+                        NativeS3BulkCopyHelper.isConnectionPoolExhausted(
+                                SdkClientException.builder()
+                                        .message("Unable to execute HTTP request")
+                                        .cause(
+                                                new RuntimeException(
+                                                        "channel acquisition failed",
+                                                        new java.util.concurrent.TimeoutException(
+                                                                "Acquire operation took longer than 10000 milliseconds.")))
+                                        .build()))
+                .isTrue();
+        assertThat(
+                        NativeS3BulkCopyHelper.isConnectionPoolExhausted(
+                                SdkClientException.builder().message("Access Denied").build()))
+                .isFalse();
+        assertThat(
+                        NativeS3BulkCopyHelper.isConnectionPoolExhausted(
+                                new RuntimeException((String) null)))
+                .isFalse();
+        assertThat(NativeS3BulkCopyHelper.isConnectionPoolExhausted(null)).isFalse();
+    }
+
+    @Test
+    void testEmptyRequestListIsNoOp() throws Exception {
+        NativeS3BulkCopyHelper noOpHelper = new NativeS3BulkCopyHelper(null, 16, 50);
+        noOpHelper.copyFiles(Collections.emptyList(), null);
     }
 }
