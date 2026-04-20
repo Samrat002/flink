@@ -92,9 +92,11 @@ class NativeS3BulkCopyHelper {
         this.maxConnections = maxConnections;
         if (maxConcurrentCopies > maxConnections) {
             LOG.warn(
-                    "s3.bulk-copy.max-concurrent ({}) exceeds s3.connection.max ({}). "
+                    "{} ({}) exceeds {} ({}). "
                             + "Clamping concurrent copies to {} to prevent connection pool exhaustion.",
+                    NativeS3FileSystemFactory.BULK_COPY_MAX_CONCURRENT.key(),
                     maxConcurrentCopies,
+                    NativeS3FileSystemFactory.MAX_CONNECTIONS.key(),
                     maxConnections,
                     maxConnections);
             this.maxConcurrentCopies = maxConnections;
@@ -103,7 +105,7 @@ class NativeS3BulkCopyHelper {
         }
     }
 
-    int getEffectiveMaxConcurrentCopies() {
+    int getMaxConcurrentCopies() {
         return maxConcurrentCopies;
     }
 
@@ -236,8 +238,8 @@ class NativeS3BulkCopyHelper {
                                         + "Consider reducing '%s' or increasing '%s'.",
                                 maxConnections,
                                 maxConcurrentCopies,
-                                "s3.bulk-copy.max-concurrent",
-                                "s3.connection.max"),
+                                NativeS3FileSystemFactory.BULK_COPY_MAX_CONCURRENT.key(),
+                                NativeS3FileSystemFactory.MAX_CONNECTIONS.key()),
                         cause);
             }
             throw new IOException("Bulk copy failed", cause);

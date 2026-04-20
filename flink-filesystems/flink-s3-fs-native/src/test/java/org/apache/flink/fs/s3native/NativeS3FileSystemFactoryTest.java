@@ -367,7 +367,9 @@ class NativeS3FileSystemFactoryTest {
 
         URI fsUri = URI.create("s3://test-bucket/");
         assertThatThrownBy(() -> factory.create(fsUri))
-                .isInstanceOf(IllegalArgumentException.class);
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("s3.connection.max")
+                .hasMessageContaining("must be a positive integer");
     }
 
     @Test
@@ -408,7 +410,7 @@ class NativeS3FileSystemFactoryTest {
         assertThat(fs).isInstanceOf(NativeS3FileSystem.class);
         NativeS3FileSystem nativeFs = (NativeS3FileSystem) fs;
         assertThat(nativeFs.getBulkCopyHelper()).isNotNull();
-        assertThat(nativeFs.getBulkCopyHelper().getEffectiveMaxConcurrentCopies()).isEqualTo(10);
+        assertThat(nativeFs.getBulkCopyHelper().getMaxConcurrentCopies()).isEqualTo(10);
     }
 
     @Test
@@ -431,7 +433,7 @@ class NativeS3FileSystemFactoryTest {
         assertThat(fs).isInstanceOf(NativeS3FileSystem.class);
         NativeS3FileSystem nativeFs = (NativeS3FileSystem) fs;
         assertThat(nativeFs.getBulkCopyHelper()).isNotNull();
-        assertThat(nativeFs.getBulkCopyHelper().getEffectiveMaxConcurrentCopies()).isEqualTo(10);
+        assertThat(nativeFs.getBulkCopyHelper().getMaxConcurrentCopies()).isEqualTo(10);
     }
 
     @Test

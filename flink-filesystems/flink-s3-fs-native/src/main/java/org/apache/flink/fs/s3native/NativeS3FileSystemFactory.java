@@ -358,6 +358,11 @@ public class NativeS3FileSystemFactory implements FileSystemFactory {
         }
 
         final int maxConnections = config.get(MAX_CONNECTIONS);
+        Preconditions.checkArgument(
+                maxConnections > 0,
+                "'%s' must be a positive integer, but was %d",
+                MAX_CONNECTIONS.key(),
+                maxConnections);
 
         S3ClientProvider clientProvider =
                 S3ClientProvider.builder()
