@@ -360,7 +360,7 @@ public class NativeS3FileSystemFactory implements FileSystemFactory {
         final int maxConnections = config.get(MAX_CONNECTIONS);
         Preconditions.checkArgument(
                 maxConnections > 0,
-                "'%s' must be a positive integer, but was %d",
+                "'%s' must be a positive integer, but was %s",
                 MAX_CONNECTIONS.key(),
                 maxConnections);
 
@@ -388,10 +388,16 @@ public class NativeS3FileSystemFactory implements FileSystemFactory {
 
         NativeS3BulkCopyHelper bulkCopyHelper = null;
         if (config.get(BULK_COPY_ENABLED)) {
+            final int bulkCopyMaxConcurrent = config.get(BULK_COPY_MAX_CONCURRENT);
+            Preconditions.checkArgument(
+                    bulkCopyMaxConcurrent > 0,
+                    "'%s' must be a positive integer, but was %s",
+                    BULK_COPY_MAX_CONCURRENT.key(),
+                    bulkCopyMaxConcurrent);
             bulkCopyHelper =
                     new NativeS3BulkCopyHelper(
                             clientProvider.getTransferManager(),
-                            config.get(BULK_COPY_MAX_CONCURRENT),
+                            bulkCopyMaxConcurrent,
                             maxConnections);
         }
 

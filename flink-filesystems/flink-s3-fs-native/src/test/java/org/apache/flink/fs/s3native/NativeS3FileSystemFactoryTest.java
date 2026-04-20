@@ -387,7 +387,8 @@ class NativeS3FileSystemFactoryTest {
         URI fsUri = URI.create("s3://test-bucket/");
         assertThatThrownBy(() -> factory.create(fsUri))
                 .isInstanceOf(IllegalArgumentException.class)
-                .hasMessageContaining("maxConcurrentCopies must be positive");
+                .hasMessageContaining("s3.bulk-copy.max-concurrent")
+                .hasMessageContaining("must be a positive integer");
     }
 
     @Test
