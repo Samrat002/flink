@@ -45,18 +45,8 @@ import java.util.concurrent.TimeUnit;
  *
  * <p>Supports per-bucket configuration overrides using the format {@code
  * s3.bucket.<bucket-name>.<property>}. Bucket-level settings override global settings; unset
- * properties inherit global values. Supported properties:
- *
- * <ul>
- *   <li>{@code region} - AWS region for this bucket
- *   <li>{@code endpoint} - custom S3 endpoint
- *   <li>{@code path-style-access} - use path-style S3 access
- *   <li>{@code access-key} / {@code secret-key} - bucket-specific credentials
- *   <li>{@code sse.type} / {@code sse.kms-key-id} - server-side encryption
- *   <li>{@code assume-role.arn} / {@code assume-role.external-id} / {@code
- *       assume-role.session-name} / {@code assume-role.session-duration} - IAM assume role
- *   <li>{@code credentials.provider} - custom credentials provider class
- * </ul>
+ * properties inherit global values. See {@link BucketConfigProvider#PROPERTY_APPLICATORS} for the
+ * complete list of supported bucket-level properties.
  *
  * @see NativeS3FileSystem
  * @see org.apache.flink.core.fs.FileSystemFactory
@@ -231,7 +221,7 @@ public class NativeS3FileSystemFactory implements FileSystemFactory {
     public static final ConfigOption<Integer> ASSUME_ROLE_SESSION_DURATION_SECONDS =
             ConfigOptions.key("s3.assume-role.session-duration")
                     .intType()
-                    .defaultValue(3600)
+                    .defaultValue(3600) // 1 hour default
                     .withDescription(
                             "Duration in seconds for the assumed role session (900-43200 seconds, default: 3600)");
 
@@ -295,7 +285,7 @@ public class NativeS3FileSystemFactory implements FileSystemFactory {
                                     + "When not set, the default chain is used: delegation tokens -> "
                                     + "static credentials (if configured) -> DefaultCredentialsProvider.");
 
-    private volatile Configuration flinkConfig;
+    @Nullable private volatile Configuration flinkConfig;
     @Nullable private volatile BucketConfigProvider bucketConfigProvider;
 
     @Override
@@ -303,6 +293,7 @@ public class NativeS3FileSystemFactory implements FileSystemFactory {
         return "s3";
     }
 
+    // setting to least priority so that it is not used by default
     @Override
     public int getPriority() {
         return -1;
@@ -431,6 +422,19 @@ public class NativeS3FileSystemFactory implements FileSystemFactory {
                 MAX_CONNECTIONS.key(),
                 maxConnections);
 
+        final int bulkCopyMaxConcurrent;
+        final boolean bulkCopyEnabled = config.get(BULK_COPY_ENABLED);
+        if (bulkCopyEnabled) {
+            bulkCopyMaxConcurrent = config.get(BULK_COPY_MAX_CONCURRENT);
+            Preconditions.checkArgument(
+                    bulkCopyMaxConcurrent > 0,
+                    "'%s' must be a positive integer, but was %s",
+                    BULK_COPY_MAX_CONCURRENT.key(),
+                    bulkCopyMaxConcurrent);
+        } else {
+            bulkCopyMaxConcurrent = 0;
+        }
+
         S3ClientProvider clientProvider =
                 S3ClientProvider.builder()
                         .accessKey(accessKey)
@@ -456,13 +460,7 @@ public class NativeS3FileSystemFactory implements FileSystemFactory {
 
         try {
             NativeS3BulkCopyHelper bulkCopyHelper = null;
-            if (config.get(BULK_COPY_ENABLED)) {
-                final int bulkCopyMaxConcurrent = config.get(BULK_COPY_MAX_CONCURRENT);
-                Preconditions.checkArgument(
-                        bulkCopyMaxConcurrent > 0,
-                        "'%s' must be a positive integer, but was %s",
-                        BULK_COPY_MAX_CONCURRENT.key(),
-                        bulkCopyMaxConcurrent);
+            if (bulkCopyEnabled) {
                 bulkCopyHelper =
                         new NativeS3BulkCopyHelper(
                                 clientProvider.getTransferManager(),

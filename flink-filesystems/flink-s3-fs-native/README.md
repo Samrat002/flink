@@ -93,15 +93,17 @@ input.sinkTo(FileSink.forRowFormat(new Path("s3://my-bucket/output"),
 
 The Native S3 FileSystem supports per-bucket configuration overrides, allowing different S3 buckets to use different connection settings within the same Flink cluster. This enables scenarios like:
 
-- **Checkpointing to one bucket** with specific credentials
-- **Savepoints to another bucket** with different region/endpoint
-- **Data sinks to third-party buckets** with cross-account IAM roles
+- **Different credentials per bucket** (e.g., cross-account access for a data sink bucket)
+- **Different regions or endpoints** (e.g., checkpoints in `us-east-1`, archive bucket in `eu-west-1`)
+- **Bucket-specific encryption** (e.g., SSE-KMS for sensitive data, SSE-S3 for logs)
 
 ### Format
 
 Bucket-level configuration uses the format: `s3.bucket.<bucket-name>.<property>`
 
 Bucket names containing dots (e.g., `my.company.data`) are fully supported through longest-suffix matching.
+
+> **Note:** AWS recommends avoiding periods (`.`) in bucket names. Buckets with dots cannot use virtual-hosted-style addressing over HTTPS without custom certificate validation. If you use dotted bucket names, enable `path-style-access` for that bucket (see [AWS documentation](https://docs.aws.amazon.com/AmazonS3/latest/userguide/bucketnamingrules.html)).
 
 ### Supported Properties
 

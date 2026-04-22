@@ -118,6 +118,9 @@ final class BucketConfigProvider {
                 continue;
             }
             final String suffix = key.substring(BUCKET_CONFIG_PREFIX.length());
+            if (suffix.isBlank()) {
+                continue;
+            }
             final String value = flinkConfig.getString(key, null);
             if (value == null) {
                 continue;
