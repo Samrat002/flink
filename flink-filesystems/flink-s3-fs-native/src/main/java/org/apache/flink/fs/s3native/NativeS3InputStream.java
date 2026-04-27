@@ -98,8 +98,24 @@ class NativeS3InputStream extends FSDataInputStream {
                 this.readBufferSize / 1024);
     }
 
+    @GuardedBy("lock")
     private void lazyInitialize() throws IOException {
+        assert lock.isHeldByCurrentThread() : "lazyInitialize() requires lock to be held";
         if (currentStream == null && !closed) {
+            openStreamAtCurrentPosition();
+        }
+    }
+
+    /** At EOF, release instead of reopening: {@code bytes=contentLength-} returns S3 416. */
+    @GuardedBy("lock")
+    private void repositionOpenStream() throws IOException {
+        assert lock.isHeldByCurrentThread() : "repositionOpenStream() requires lock to be held";
+        if (currentStream == null) {
+            return;
+        }
+        if (position >= contentLength) {
+            releaseStreams();
+        } else {
             openStreamAtCurrentPosition();
         }
     }
@@ -222,9 +238,7 @@ class NativeS3InputStream extends FSDataInputStream {
 
             if (desired != position) {
                 position = desired;
-                if (currentStream != null) {
-                    openStreamAtCurrentPosition();
-                }
+                repositionOpenStream();
             }
         } finally {
             lock.unlock();
@@ -248,10 +262,10 @@ class NativeS3InputStream extends FSDataInputStream {
             if (closed) {
                 throw new IOException("Stream is closed");
             }
-            lazyInitialize();
             if (position >= contentLength) {
                 return -1;
             }
+            lazyInitialize();
             int data = bufferedStream.read();
             if (data != -1) {
                 position++;
@@ -281,10 +295,10 @@ class NativeS3InputStream extends FSDataInputStream {
             if (closed) {
                 throw new IOException("Stream is closed");
             }
-            lazyInitialize();
             if (position >= contentLength) {
                 return -1;
             }
+            lazyInitialize();
             long remaining = contentLength - position;
             int toRead = (int) Math.min(len, remaining);
             int bytesRead = bufferedStream.read(b, off, toRead);
@@ -370,9 +384,7 @@ class NativeS3InputStream extends FSDataInputStream {
             long skipped = newPos - position;
             if (newPos != position) {
                 position = newPos;
-                if (currentStream != null) {
-                    openStreamAtCurrentPosition();
-                }
+                repositionOpenStream();
             }
             return skipped;
         } finally {

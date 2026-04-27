@@ -166,7 +166,7 @@ class NativeS3InputStreamTest {
         assertThat(stream.wasAborted()).isTrue();
         // close() must still be called for SDK resource cleanup (connection pool return, etc.)
         assertThat(stream.wasClosed()).isTrue();
-        // abort() must happen BEFORE close() — otherwise close() drains remaining bytes
+        // abort() must happen BEFORE close() - otherwise close() drains remaining bytes
         assertThat(stream.wasAbortedBeforeClose()).isTrue();
     }
 
@@ -297,6 +297,48 @@ class NativeS3InputStreamTest {
             assertThat(in.read(new byte[8], 0, 8)).isEqualTo(-1);
             assertThat(in.getPos()).isEqualTo(DATA.length);
             assertThat(in.available()).isZero();
+            // EOF short-circuits before lazyInitialize, so no range request is issued.
+            assertThat(client.getObjectCalls()).isZero();
+        }
+    }
+
+    @Test
+    void seekToContentLengthWithOpenStreamReleasesStream() throws Exception {
+        StubS3Client client = new StubS3Client(DATA);
+        try (NativeS3InputStream in = new NativeS3InputStream(client, BUCKET, KEY, DATA.length)) {
+            in.read();
+            TrackingInputStream first = client.lastStream();
+            assertThat(client.getObjectCalls()).isEqualTo(1);
+
+            in.seek(DATA.length);
+
+            assertThat(first.wasAborted()).isTrue();
+            assertThat(first.wasClosed()).isTrue();
+            assertThat(first.wasAbortedBeforeClose()).isTrue();
+            // bytes=contentLength- is unsatisfiable, so we must not reopen.
+            assertThat(client.getObjectCalls()).isEqualTo(1);
+            assertThat(in.read()).isEqualTo(-1);
+            assertThat(in.read(new byte[4], 0, 4)).isEqualTo(-1);
+            assertThat(client.getObjectCalls()).isEqualTo(1);
+        }
+    }
+
+    @Test
+    void skipToEofWithOpenStreamReleasesStream() throws Exception {
+        StubS3Client client = new StubS3Client(DATA);
+        try (NativeS3InputStream in = new NativeS3InputStream(client, BUCKET, KEY, DATA.length)) {
+            in.read();
+            TrackingInputStream first = client.lastStream();
+            assertThat(client.getObjectCalls()).isEqualTo(1);
+
+            assertThat(in.skip(DATA.length)).isEqualTo(DATA.length - 1);
+            assertThat(in.getPos()).isEqualTo(DATA.length);
+
+            assertThat(first.wasAborted()).isTrue();
+            assertThat(first.wasClosed()).isTrue();
+            assertThat(first.wasAbortedBeforeClose()).isTrue();
+            assertThat(client.getObjectCalls()).isEqualTo(1);
+            assertThat(in.read()).isEqualTo(-1);
         }
     }
 
