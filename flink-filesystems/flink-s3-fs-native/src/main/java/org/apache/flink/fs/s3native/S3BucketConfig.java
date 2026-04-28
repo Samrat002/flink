@@ -19,6 +19,7 @@
 package org.apache.flink.fs.s3native;
 
 import org.apache.flink.annotation.Internal;
+import org.apache.flink.configuration.GlobalConfiguration;
 import org.apache.flink.configuration.IllegalConfigurationException;
 
 import javax.annotation.Nullable;
@@ -202,7 +203,7 @@ final class S3BucketConfig {
             sb.append(", pathStyleAccess=").append(pathStyleAccess);
         }
         if (accessKey != null) {
-            sb.append(", credentials=<set>");
+            sb.append(", credentials=").append(GlobalConfiguration.HIDDEN_CONTENT);
         }
         if (sseType != null) {
             sb.append(", sseType='").append(sseType).append("'");

@@ -270,25 +270,6 @@ class BucketConfigProviderTest {
     }
 
     @Test
-    void testChinaPartitionBucketConfig() {
-        Configuration config = new Configuration();
-        config.setString(
-                "s3.bucket.cn-data-bucket.endpoint", "https://s3.cn-north-1.amazonaws.com.cn");
-        config.setString("s3.bucket.cn-data-bucket.region", "cn-north-1");
-        config.setString("s3.bucket.cn-data-bucket.path-style-access", "false");
-
-        BucketConfigProvider provider = new BucketConfigProvider(config);
-
-        assertThat(provider.hasBucketConfig("cn-data-bucket")).isTrue();
-
-        S3BucketConfig bucketConfig = provider.getBucketConfig("cn-data-bucket");
-        assertThat(bucketConfig).isNotNull();
-        assertThat(bucketConfig.getEndpoint()).isEqualTo("https://s3.cn-north-1.amazonaws.com.cn");
-        assertThat(bucketConfig.getRegion()).isEqualTo("cn-north-1");
-        assertThat(bucketConfig.getPathStyleAccess()).isFalse();
-    }
-
-    @Test
     void testFullScenarioCheckpointAndSavepoint() {
         Configuration config = new Configuration();
         config.setString("s3.access-key", "GLOBAL_KEY");

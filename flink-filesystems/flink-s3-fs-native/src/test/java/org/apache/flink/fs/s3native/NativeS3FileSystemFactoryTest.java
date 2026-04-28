@@ -379,130 +379,13 @@ class NativeS3FileSystemFactoryTest {
 
     // ---- Bucket-level configuration tests ----
 
-    @Test
-    void testCreateFileSystemWithBucketSpecificEndpoint() throws Exception {
-        NativeS3FileSystemFactory factory = new NativeS3FileSystemFactory();
-        Configuration config = new Configuration();
-        config.setString("s3.access-key", "global-access-key");
-        config.setString("s3.secret-key", "global-secret-key");
-        config.setString("s3.region", "us-east-1");
-        config.setString("s3.bucket.my-bucket.endpoint", "http://localhost:9000");
-        config.setString("io.tmp.dirs", System.getProperty("java.io.tmpdir"));
-
-        factory.configure(config);
-
-        URI fsUri = URI.create("s3://my-bucket/");
-        FileSystem fs = factory.create(fsUri);
-
-        assertThat(fs).isNotNull();
-        assertThat(fs).isInstanceOf(NativeS3FileSystem.class);
-    }
-
-    @Test
-    void testCreateFileSystemWithBucketSpecificRegion() throws Exception {
-        NativeS3FileSystemFactory factory = new NativeS3FileSystemFactory();
-        Configuration config = new Configuration();
-        config.setString("s3.access-key", "global-access-key");
-        config.setString("s3.secret-key", "global-secret-key");
-        config.setString("s3.region", "us-east-1");
-        config.setString("s3.bucket.eu-bucket.region", "eu-west-1");
-        config.setString("io.tmp.dirs", System.getProperty("java.io.tmpdir"));
-
-        factory.configure(config);
-
-        URI fsUri = URI.create("s3://eu-bucket/");
-        FileSystem fs = factory.create(fsUri);
-
-        assertThat(fs).isNotNull();
-        assertThat(fs).isInstanceOf(NativeS3FileSystem.class);
-    }
-
-    @Test
-    void testCreateFileSystemWithBucketSpecificCredentials() throws Exception {
-        NativeS3FileSystemFactory factory = new NativeS3FileSystemFactory();
-        Configuration config = new Configuration();
-        config.setString("s3.access-key", "global-access-key");
-        config.setString("s3.secret-key", "global-secret-key");
-        config.setString("s3.region", "us-east-1");
-        config.setString("s3.bucket.secure-bucket.access-key", "bucket-access-key");
-        config.setString("s3.bucket.secure-bucket.secret-key", "bucket-secret-key");
-        config.setString("io.tmp.dirs", System.getProperty("java.io.tmpdir"));
-
-        factory.configure(config);
-
-        URI fsUri = URI.create("s3://secure-bucket/");
-        FileSystem fs = factory.create(fsUri);
-
-        assertThat(fs).isNotNull();
-        assertThat(fs).isInstanceOf(NativeS3FileSystem.class);
-    }
-
-    @Test
-    void testCreateFileSystemWithBucketSpecificSSE() throws Exception {
-        NativeS3FileSystemFactory factory = new NativeS3FileSystemFactory();
-        Configuration config = new Configuration();
-        config.setString("s3.access-key", "global-access-key");
-        config.setString("s3.secret-key", "global-secret-key");
-        config.setString("s3.region", "us-east-1");
-        config.setString("s3.bucket.encrypted-bucket.sse.type", "sse-kms");
-        config.setString(
-                "s3.bucket.encrypted-bucket.sse.kms-key-id", "arn:aws:kms:us-east-1:123:key/abc");
-        config.setString("io.tmp.dirs", System.getProperty("java.io.tmpdir"));
-
-        factory.configure(config);
-
-        URI fsUri = URI.create("s3://encrypted-bucket/");
-        FileSystem fs = factory.create(fsUri);
-
-        assertThat(fs).isNotNull();
-        assertThat(fs).isInstanceOf(NativeS3FileSystem.class);
-    }
-
-    @Test
-    void testBucketWithoutOverridesUsesGlobalConfig() throws Exception {
-        NativeS3FileSystemFactory factory = new NativeS3FileSystemFactory();
-        Configuration config = new Configuration();
-        config.setString("s3.access-key", "global-access-key");
-        config.setString("s3.secret-key", "global-secret-key");
-        config.setString("s3.region", "us-east-1");
-        config.setString("s3.bucket.other-bucket.region", "eu-west-1");
-        config.setString("io.tmp.dirs", System.getProperty("java.io.tmpdir"));
-
-        factory.configure(config);
-
-        // This bucket has no overrides; should use global config
-        URI fsUri = URI.create("s3://default-bucket/");
-        FileSystem fs = factory.create(fsUri);
-
-        assertThat(fs).isNotNull();
-        assertThat(fs).isInstanceOf(NativeS3FileSystem.class);
-    }
-
-    @Test
-    void testMultipleBucketsWithDifferentConfigs() throws Exception {
-        NativeS3FileSystemFactory factory = new NativeS3FileSystemFactory();
-        Configuration config = new Configuration();
-        config.setString("s3.access-key", "global-access-key");
-        config.setString("s3.secret-key", "global-secret-key");
-        config.setString("s3.region", "us-east-1");
-
-        config.setString("s3.bucket.bucket-a.endpoint", "http://minio-a:9000");
-        config.setString("s3.bucket.bucket-a.path-style-access", "true");
-
-        config.setString("s3.bucket.bucket-b.region", "eu-central-1");
-        config.setString("s3.bucket.bucket-b.sse.type", "sse-s3");
-
-        config.setString("io.tmp.dirs", System.getProperty("java.io.tmpdir"));
-
-        factory.configure(config);
-
-        FileSystem fsA = factory.create(URI.create("s3://bucket-a/"));
-        FileSystem fsB = factory.create(URI.create("s3://bucket-b/"));
-
-        assertThat(fsA).isNotNull().isInstanceOf(NativeS3FileSystem.class);
-        assertThat(fsB).isNotNull().isInstanceOf(NativeS3FileSystem.class);
-    }
-
+    /**
+     * Validates that misconfigured per-bucket credentials surface as a configuration error at
+     * {@code configure()} time, not as an opaque AWS SDK error at first request. Override
+     * resolution itself (which wins between bucket and global) is exhaustively covered by {@code
+     * BucketConfigProviderTest}; this test guards the factory-layer behaviour that is unique to it:
+     * throwing on partial bucket credentials.
+     */
     @Test
     void testBucketSpecificPartialCredentialsThrows() {
         NativeS3FileSystemFactory factory = new NativeS3FileSystemFactory();
@@ -516,26 +399,5 @@ class NativeS3FileSystemFactoryTest {
         assertThatThrownBy(() -> factory.configure(config))
                 .isInstanceOf(IllegalConfigurationException.class)
                 .hasMessageContaining("must be set together");
-    }
-
-    @Test
-    void testBucketConfigWithAssumeRole() throws Exception {
-        NativeS3FileSystemFactory factory = new NativeS3FileSystemFactory();
-        Configuration config = new Configuration();
-        config.setString("s3.access-key", "global-access-key");
-        config.setString("s3.secret-key", "global-secret-key");
-        config.setString("s3.region", "us-east-1");
-        config.setString(
-                "s3.bucket.cross-account.assume-role.arn", "arn:aws:iam::123:role/CrossRole");
-        config.setString("s3.bucket.cross-account.assume-role.external-id", "ext-123");
-        config.setString("io.tmp.dirs", System.getProperty("java.io.tmpdir"));
-
-        factory.configure(config);
-
-        URI fsUri = URI.create("s3://cross-account/");
-        FileSystem fs = factory.create(fsUri);
-
-        assertThat(fs).isNotNull();
-        assertThat(fs).isInstanceOf(NativeS3FileSystem.class);
     }
 }

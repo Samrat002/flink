@@ -18,6 +18,7 @@
 
 package org.apache.flink.fs.s3native;
 
+import org.apache.flink.configuration.GlobalConfiguration;
 import org.apache.flink.configuration.IllegalConfigurationException;
 
 import org.junit.jupiter.api.Test;
@@ -158,7 +159,7 @@ class S3BucketConfigTest {
                         .build();
 
         String str = config.toString();
-        assertThat(str).contains("credentials=<set>");
+        assertThat(str).contains("credentials=" + GlobalConfiguration.HIDDEN_CONTENT);
         assertThat(str).doesNotContain("AKIAIOSFODNN7EXAMPLE");
         assertThat(str).doesNotContain("wJalrXUtnFEMI");
     }

@@ -36,7 +36,6 @@ import javax.annotation.Nullable;
 import java.io.IOException;
 import java.net.URI;
 import java.time.Duration;
-import java.util.concurrent.TimeUnit;
 
 /**
  * Factory for creating Native S3 FileSystem instances using AWS SDK v2.
@@ -285,8 +284,8 @@ public class NativeS3FileSystemFactory implements FileSystemFactory {
                                     + "When not set, the default chain is used: delegation tokens -> "
                                     + "static credentials (if configured) -> DefaultCredentialsProvider.");
 
-    @Nullable private volatile Configuration flinkConfig;
-    @Nullable private volatile BucketConfigProvider bucketConfigProvider;
+    @Nullable private Configuration flinkConfig;
+    @Nullable private BucketConfigProvider bucketConfigProvider;
 
     @Override
     public String getScheme() {
@@ -422,19 +421,6 @@ public class NativeS3FileSystemFactory implements FileSystemFactory {
                 MAX_CONNECTIONS.key(),
                 maxConnections);
 
-        final int bulkCopyMaxConcurrent;
-        final boolean bulkCopyEnabled = config.get(BULK_COPY_ENABLED);
-        if (bulkCopyEnabled) {
-            bulkCopyMaxConcurrent = config.get(BULK_COPY_MAX_CONCURRENT);
-            Preconditions.checkArgument(
-                    bulkCopyMaxConcurrent > 0,
-                    "'%s' must be a positive integer, but was %s",
-                    BULK_COPY_MAX_CONCURRENT.key(),
-                    bulkCopyMaxConcurrent);
-        } else {
-            bulkCopyMaxConcurrent = 0;
-        }
-
         S3ClientProvider clientProvider =
                 S3ClientProvider.builder()
                         .accessKey(accessKey)
@@ -458,39 +444,33 @@ public class NativeS3FileSystemFactory implements FileSystemFactory {
                         .encryptionConfig(encryptionConfig)
                         .build();
 
-        try {
-            NativeS3BulkCopyHelper bulkCopyHelper = null;
-            if (bulkCopyEnabled) {
-                bulkCopyHelper =
-                        new NativeS3BulkCopyHelper(
-                                clientProvider.getTransferManager(),
-                                bulkCopyMaxConcurrent,
-                                maxConnections);
-            }
-
-            return new NativeS3FileSystem(
-                    clientProvider,
-                    fsUri,
-                    entropyInjectionKey,
-                    numEntropyChars,
-                    localTmpDirectory,
-                    s3minPartSize,
-                    maxConcurrentUploads,
-                    bulkCopyHelper,
-                    useAsyncOperations,
-                    readBufferSize,
-                    config.get(FS_CLOSE_TIMEOUT));
-        } catch (Exception e) {
-            try {
-                clientProvider.closeAsync().get(30, TimeUnit.SECONDS);
-            } catch (Exception closeEx) {
-                e.addSuppressed(closeEx);
-            }
-            if (e instanceof IOException) {
-                throw (IOException) e;
-            }
-            throw new IOException("Failed to create NativeS3FileSystem for " + fsUri, e);
+        NativeS3BulkCopyHelper bulkCopyHelper = null;
+        if (config.get(BULK_COPY_ENABLED)) {
+            final int bulkCopyMaxConcurrent = config.get(BULK_COPY_MAX_CONCURRENT);
+            Preconditions.checkArgument(
+                    bulkCopyMaxConcurrent > 0,
+                    "'%s' must be a positive integer, but was %s",
+                    BULK_COPY_MAX_CONCURRENT.key(),
+                    bulkCopyMaxConcurrent);
+            bulkCopyHelper =
+                    new NativeS3BulkCopyHelper(
+                            clientProvider.getTransferManager(),
+                            bulkCopyMaxConcurrent,
+                            maxConnections);
         }
+
+        return new NativeS3FileSystem(
+                clientProvider,
+                fsUri,
+                entropyInjectionKey,
+                numEntropyChars,
+                localTmpDirectory,
+                s3minPartSize,
+                maxConcurrentUploads,
+                bulkCopyHelper,
+                useAsyncOperations,
+                readBufferSize,
+                config.get(FS_CLOSE_TIMEOUT));
     }
 
     @Nullable
