@@ -65,7 +65,7 @@ class S3EncryptionConfigTest {
     @MethodSource
     void sseKms_contextOnlyFactory_absentContext_hasEncryptionContextFalse(
             Map<String, String> context) {
-        S3EncryptionConfig c = S3EncryptionConfig.sseKms(context);
+        S3EncryptionConfig c = S3EncryptionConfig.sseKms(null, context);
 
         assertThat(c.getEncryptionContext()).isEmpty();
         assertThat(c.hasEncryptionContext()).isFalse();
@@ -78,7 +78,7 @@ class S3EncryptionConfigTest {
     @Test
     void sseKms_contextOnlyFactory_contextMutatedAfterCreation_contextUnchanged() {
         Map<String, String> ctx = new HashMap<>(Map.of("dept", "finance"));
-        S3EncryptionConfig c = S3EncryptionConfig.sseKms(ctx);
+        S3EncryptionConfig c = S3EncryptionConfig.sseKms(null, ctx);
         ctx.put("extra", "value");
 
         assertThat(c.getEncryptionContext()).isEqualTo(Map.of("dept", "finance"));
@@ -177,7 +177,7 @@ class S3EncryptionConfigTest {
     @MethodSource
     void serializeEncryptionContext_exactOutput_correctBase64Json(
             Map<String, String> context, String expectedDecoded) {
-        S3EncryptionConfig c = S3EncryptionConfig.sseKms(context);
+        S3EncryptionConfig c = S3EncryptionConfig.sseKms(null, context);
         String decoded = new String(Base64.getDecoder().decode(c.serializeEncryptionContext()));
 
         assertThat(decoded).isEqualTo(expectedDecoded);
@@ -191,7 +191,7 @@ class S3EncryptionConfigTest {
 
     @Test
     void serializeEncryptionContext_multipleEntries_allEntriesPresent() {
-        S3EncryptionConfig c = S3EncryptionConfig.sseKms(Map.of("k1", "v1", "k2", "v2"));
+        S3EncryptionConfig c = S3EncryptionConfig.sseKms(null, Map.of("k1", "v1", "k2", "v2"));
         String decoded = new String(Base64.getDecoder().decode(c.serializeEncryptionContext()));
 
         assertThat(decoded).contains("\"k1\":\"v1\"", "\"k2\":\"v2\"");
@@ -201,7 +201,7 @@ class S3EncryptionConfigTest {
     @MethodSource
     void serializeEncryptionContext_jsonSpecialChars_escapedCorrectly(
             String key, String value, String expectedFragment) {
-        S3EncryptionConfig c = S3EncryptionConfig.sseKms(Map.of(key, value));
+        S3EncryptionConfig c = S3EncryptionConfig.sseKms(null, Map.of(key, value));
         String decoded = new String(Base64.getDecoder().decode(c.serializeEncryptionContext()));
 
         assertThat(decoded).contains(expectedFragment);

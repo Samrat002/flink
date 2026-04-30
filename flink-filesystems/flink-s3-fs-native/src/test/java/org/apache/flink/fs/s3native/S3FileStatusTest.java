@@ -38,7 +38,8 @@ class S3FileStatusTest {
         return Stream.of(
                 Arguments.of(0L, 0L),
                 Arguments.of(1024L, 987654321L),
-                Arguments.of(Long.MAX_VALUE, Long.MAX_VALUE));
+                Arguments.of(Long.MAX_VALUE, Long.MAX_VALUE),
+                Arguments.of(-1, -1));
     }
 
     @ParameterizedTest

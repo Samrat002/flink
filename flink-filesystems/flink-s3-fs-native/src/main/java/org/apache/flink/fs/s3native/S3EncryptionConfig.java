@@ -108,15 +108,6 @@ public class S3EncryptionConfig implements Serializable {
     }
 
     /**
-     * Creates a config for SSE-KMS encryption with the default KMS key and an encryption context.
-     *
-     * @param encryptionContext The encryption context key-value pairs
-     */
-    public static S3EncryptionConfig sseKms(Map<String, String> encryptionContext) {
-        return new S3EncryptionConfig(EncryptionType.SSE_KMS, null, encryptionContext);
-    }
-
-    /**
      * @param kmsKeyId The KMS key ID, ARN, or alias (e.g., "arn:aws:kms:region:account:key/key-id"
      *     or "alias/my-key")
      */
@@ -145,7 +136,11 @@ public class S3EncryptionConfig implements Serializable {
      */
     public static S3EncryptionConfig sseKms(
             String kmsKeyId, Map<String, String> encryptionContext) {
-        return new S3EncryptionConfig(EncryptionType.SSE_KMS, kmsKeyId, encryptionContext);
+        if (kmsKeyId != null && !kmsKeyId.isEmpty()) {
+            return new S3EncryptionConfig(EncryptionType.SSE_KMS, kmsKeyId, encryptionContext);
+        } else {
+            return new S3EncryptionConfig(EncryptionType.SSE_KMS, null, encryptionContext);
+        }
     }
 
     /**
@@ -174,9 +169,7 @@ public class S3EncryptionConfig implements Serializable {
                 return sseS3();
             case "sse-kms":
             case "aws:kms":
-                return kmsKeyId != null && !kmsKeyId.isEmpty()
-                        ? sseKms(kmsKeyId, encryptionContext)
-                        : sseKms(encryptionContext);
+                return sseKms(kmsKeyId, encryptionContext);
             default:
                 throw new IllegalArgumentException(
                         "Unknown encryption type: "
