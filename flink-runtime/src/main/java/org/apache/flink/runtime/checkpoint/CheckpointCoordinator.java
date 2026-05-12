@@ -61,6 +61,7 @@ import javax.annotation.Nullable;
 import javax.annotation.concurrent.GuardedBy;
 
 import java.io.IOException;
+import java.time.Duration;
 import java.util.ArrayDeque;
 import java.util.ArrayList;
 import java.util.Collection;
@@ -2000,17 +2001,21 @@ public class CheckpointCoordinator {
     }
 
     /**
-     * Returns {@code -1} if a checkpoint is already in flight, otherwise the remaining time (in ms)
-     * until {@code minPauseBetweenCheckpoints} is satisfied ({@code 0} = trigger now). All checks
-     * are made under the coordinator lock.
+     * Returns {@link Optional#empty()} if a checkpoint is already in flight (triggering or
+     * pending). Otherwise returns the remaining {@link Duration} until {@code
+     * minPauseBetweenCheckpoints} is satisfied; {@link Duration#ZERO} means the trigger can fire
+     * immediately. When {@code lastCheckpointCompletionRelativeTime} is {@code 0} (no checkpoint
+     * has completed yet), the full min-pause is treated as already elapsed and {@link
+     * Duration#ZERO} is returned. All checks are made under the coordinator lock.
      */
-    public long getActiveCheckpointTriggerDelay() {
+    public Optional<Duration> getActiveCheckpointTriggerDelay() {
         synchronized (lock) {
             if (isTriggering || !pendingCheckpoints.isEmpty()) {
-                return -1L;
+                return Optional.empty();
             }
             final long elapsed = clock.relativeTimeMillis() - lastCheckpointCompletionRelativeTime;
-            return Math.max(0L, minPauseBetweenCheckpoints - elapsed);
+            final long remaining = minPauseBetweenCheckpoints - elapsed;
+            return Optional.of(remaining > 0 ? Duration.ofMillis(remaining) : Duration.ZERO);
         }
     }
 

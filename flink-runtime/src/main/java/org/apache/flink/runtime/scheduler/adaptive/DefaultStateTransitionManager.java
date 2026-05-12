@@ -164,7 +164,18 @@ public class DefaultStateTransitionManager implements RescaleContext, StateTrans
         progressToPhase(new Stabilized(clock, this, firstChangeEventTimestamp, maxTriggerDelay));
     }
 
-    void requestActiveCheckpointTrigger() {
+    /**
+     * Requests the active checkpoint trigger from the context. Called from within phase lifecycle
+     * methods:
+     *
+     * <ul>
+     *   <li>On entering {@link Stabilizing} (to overlap checkpoint with the stabilization wait)
+     *   <li>On each {@link Stabilizing#onChange} event (retry if a previous trigger was skipped)
+     *   <li>On entering {@link Stabilized} (fallback if no checkpoint completed during
+     *       stabilization)
+     * </ul>
+     */
+    private void requestActiveCheckpointTrigger() {
         transitionContext.requestActiveCheckpointTrigger();
     }
 

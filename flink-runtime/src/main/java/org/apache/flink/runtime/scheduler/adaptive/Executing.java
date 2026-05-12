@@ -68,6 +68,7 @@ class Executing extends StateWithExecutionGraph
     private final StateTransitionManager stateTransitionManager;
     private final int rescaleOnFailedCheckpointCount;
     private final boolean activeCheckpointTriggerEnabled;
+    // only modifiable from the main thread
     private boolean activeCheckpointTriggerScheduled;
     // null indicates that there was no change event observed, yet
     @Nullable private AtomicInteger failedCheckpointCountdown;
@@ -201,18 +202,15 @@ class Executing extends StateWithExecutionGraph
             return;
         }
 
-        final long triggerDelayMillis = checkpointCoordinator.getActiveCheckpointTriggerDelay();
-        if (triggerDelayMillis < 0L) {
+        final Optional<Duration> triggerDelay =
+                checkpointCoordinator.getActiveCheckpointTriggerDelay();
+        if (triggerDelay.isEmpty()) {
             getLogger()
                     .debug(
                             "Skipping active checkpoint trigger for rescale: checkpoint already in progress.");
             return;
         }
-        if (triggerDelayMillis > 0L) {
-            scheduleActiveCheckpointTriggerRetry(triggerDelayMillis);
-            return;
-        }
-        fireActiveCheckpointTrigger(checkpointCoordinator);
+        scheduleActiveCheckpointTriggerRetry(triggerDelay.get());
     }
 
     private boolean shouldTriggerActiveCheckpoint(
@@ -233,17 +231,18 @@ class Executing extends StateWithExecutionGraph
         return true;
     }
 
-    private void scheduleActiveCheckpointTriggerRetry(long delayMillis) {
+    private void scheduleActiveCheckpointTriggerRetry(Duration delay) {
         if (activeCheckpointTriggerScheduled) {
             return;
         }
         activeCheckpointTriggerScheduled = true;
-        getLogger()
-                .debug(
-                        "Min pause not satisfied, scheduling active checkpoint trigger retry in {} ms.",
-                        delayMillis);
-        context.runIfState(
-                this, this::tryFireActiveCheckpointAfterRetry, Duration.ofMillis(delayMillis));
+        if (!delay.isZero()) {
+            getLogger()
+                    .debug(
+                            "Min pause not satisfied, scheduling active checkpoint trigger retry in {} ms.",
+                            delay.toMillis());
+        }
+        context.runIfState(this, this::tryFireActiveCheckpointAfterRetry, delay);
     }
 
     private void tryFireActiveCheckpointAfterRetry() {
@@ -253,8 +252,18 @@ class Executing extends StateWithExecutionGraph
         if (!shouldTriggerActiveCheckpoint(checkpointCoordinator)) {
             return;
         }
-        if (checkpointCoordinator.getActiveCheckpointTriggerDelay() == 0L) {
+        final Optional<Duration> triggerDelay =
+                checkpointCoordinator.getActiveCheckpointTriggerDelay();
+        if (triggerDelay.isEmpty()) {
+            getLogger()
+                    .debug(
+                            "Active checkpoint trigger for rescale dropped: checkpoint already in progress after retry.");
+        } else if (triggerDelay.get().isZero()) {
             fireActiveCheckpointTrigger(checkpointCoordinator);
+        } else {
+            getLogger()
+                    .debug(
+                            "Active checkpoint trigger for rescale silently dropped: a periodic checkpoint completed while the trigger was scheduled.");
         }
     }
 
