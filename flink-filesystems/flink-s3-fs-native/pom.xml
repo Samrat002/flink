@@ -90,6 +90,22 @@ under the License.
 		</dependency>
 
 		<dependency>
+			<groupId>software.amazon.awssdk</groupId>
+			<artifactId>aws-crt-client</artifactId>
+			<version>${fs.s3.aws.sdk.version}</version>
+			<optional>${flink.markBundledAsOptional}</optional>
+			<exclusions>
+				<!-- aws-crt contains JNI native libs with hardcoded FindClass paths;
+				     it cannot be bundled or shaded. It must be placed alongside the
+				     fat JAR in the plugin directory with its original class names. -->
+				<exclusion>
+					<groupId>software.amazon.awssdk.crt</groupId>
+					<artifactId>aws-crt</artifactId>
+				</exclusion>
+			</exclusions>
+		</dependency>
+
+		<dependency>
 			<groupId>org.apache.flink</groupId>
 			<artifactId>flink-runtime</artifactId>
 			<version>${project.version}</version>
@@ -164,6 +180,14 @@ under the License.
 								<relocation>
 									<pattern>software.amazon.awssdk</pattern>
 									<shadedPattern>org.apache.flink.fs.s3native.shaded.software.amazon.awssdk</shadedPattern>
+									<excludes>
+										<!-- aws-crt JNI bridge classes must keep their original names.
+										     The C-side FindClass paths are hardcoded in native code and
+										     cannot be relocated. aws-crt-client (pure Java) is bundled
+										     and shaded, but its calls into aws-crt must resolve against
+										     the external aws-crt JAR using the original package names. -->
+										<exclude>software.amazon.awssdk.crt.**</exclude>
+									</excludes>
 								</relocation>
 								<relocation>
 									<pattern>org.apache.http</pattern>

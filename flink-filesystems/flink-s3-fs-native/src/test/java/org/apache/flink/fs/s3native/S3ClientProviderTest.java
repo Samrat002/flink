@@ -271,6 +271,70 @@ class S3ClientProviderTest {
                 .hasMessageContaining("retryThrottleBaseDelay");
     }
 
+    @Test
+    void testCrtDisabledByDefault() {
+        S3ClientProvider provider =
+                S3ClientProvider.builder().endpoint(DUMMY_ENDPOINT).region(DUMMY_REGION).build();
+        assertThat(provider.isUseCrt()).isFalse();
+        // When CRT is disabled the async client must NOT be a CRT-backed implementation.
+        assertThat(provider.getAsyncClient().getClass().getName()).doesNotContain("Crt");
+        // No Flink-level default applied; getter returns null when user did not set the value.
+        assertThat(provider.getCrtTargetThroughputGbps()).isNull();
+    }
+
+    @Test
+    void testCrtFlagIsRecordedAndCrtBranchIsTaken() {
+        S3ClientProvider provider =
+                S3ClientProvider.builder()
+                        .endpoint(DUMMY_ENDPOINT)
+                        .region(DUMMY_REGION)
+                        .useCrt(true)
+                        .crtTargetThroughputGbps(20.0)
+                        .build();
+
+        assertThat(provider.isUseCrt()).isTrue();
+        assertThat(provider.getCrtTargetThroughputGbps()).isEqualTo(20.0);
+        // Verify the if (useCrt) branch was actually taken — the async client must be a
+        // CRT-backed implementation, not the default Netty-backed one. Class name check is more
+        // stable than reflecting into SDK-internal fields and surfaces SDK-version drift via test
+        // failures (which is desirable).
+        assertThat(provider.getAsyncClient().getClass().getName()).contains("Crt");
+    }
+
+    @Test
+    void testCrtEnabledWithoutThroughputOverrideStillBuildsCrtClient() {
+        // CRT must work without a Flink-level throughput override: when
+        // s3.crt.target-throughput-gbps is unset the AWS CRT runtime applies its own internal
+        // default. This guards against a regression where unsetting the option would skip
+        // construction or pick the wrong builder branch.
+        S3ClientProvider provider =
+                S3ClientProvider.builder()
+                        .endpoint(DUMMY_ENDPOINT)
+                        .region(DUMMY_REGION)
+                        .useCrt(true)
+                        .build();
+
+        assertThat(provider.isUseCrt()).isTrue();
+        assertThat(provider.getCrtTargetThroughputGbps()).isNull();
+        assertThat(provider.getAsyncClient().getClass().getName()).contains("Crt");
+    }
+
+    @Test
+    void testCrtMissingJarsMessageIsActionable() {
+        // Contract test: if CRT classes are missing at runtime the user must get a message
+        // that names the responsible config key, the missing JAR coordinates, and a setup
+        // pointer. A full classloader-isolation test would require multi-classloader infra
+        // disproportionate to the value; assert the message contract instead.
+        String msg = S3ClientProvider.Builder.crtMissingJarsMessage();
+        assertThat(msg).contains("s3.crt.enabled=true");
+        // aws-crt-client is now bundled in the fat JAR; only aws-crt (JNI) is external
+        assertThat(msg).doesNotContain("aws-crt-client");
+        assertThat(msg).contains("aws-crt");
+        assertThat(msg).contains("plugin");
+        assertThat(msg).contains("README");
+    }
+    }
+
     @SuppressWarnings("unchecked")
     private static List<AwsCredentialsProvider> extractChain(AwsCredentialsProvider provider)
             throws Exception {

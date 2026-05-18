@@ -34,6 +34,7 @@ import software.amazon.awssdk.auth.credentials.DefaultCredentialsProvider;
 import software.amazon.awssdk.auth.credentials.StaticCredentialsProvider;
 import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration;
 import software.amazon.awssdk.http.apache.ApacheHttpClient;
+import software.amazon.awssdk.http.crt.AwsCrtHttpClient;
 import software.amazon.awssdk.http.nio.netty.NettyNioAsyncHttpClient;
 import software.amazon.awssdk.regions.Region;
 import software.amazon.awssdk.regions.providers.DefaultAwsRegionProviderChain;
@@ -44,6 +45,9 @@ import software.amazon.awssdk.services.s3.S3AsyncClientBuilder;
 import software.amazon.awssdk.services.s3.S3Client;
 import software.amazon.awssdk.services.s3.S3ClientBuilder;
 import software.amazon.awssdk.services.s3.S3Configuration;
+import software.amazon.awssdk.services.s3.S3CrtAsyncClientBuilder;
+import software.amazon.awssdk.services.s3.crt.S3CrtHttpConfiguration;
+import software.amazon.awssdk.services.s3.crt.S3CrtRetryConfiguration;
 import software.amazon.awssdk.services.sts.StsClient;
 import software.amazon.awssdk.services.sts.auth.StsAssumeRoleCredentialsProvider;
 import software.amazon.awssdk.services.sts.model.AssumeRoleRequest;
@@ -76,6 +80,7 @@ class S3ClientProvider implements AutoCloseableAsync {
     private static final Logger LOG = LoggerFactory.getLogger(S3ClientProvider.class);
 
     private final S3Client s3Client;
+    private final S3AsyncClient asyncClient;
     private final S3TransferManager transferManager;
     private final S3EncryptionConfig encryptionConfig;
     private final AwsCredentialsProvider credentialsProvider;
@@ -98,10 +103,13 @@ class S3ClientProvider implements AutoCloseableAsync {
     @Nullable private final String assumeRoleExternalId;
     @Nullable private final String assumeRoleSessionName;
     private final int assumeRoleSessionDurationSeconds;
+    private final boolean useCrt;
+    @Nullable private final Double crtTargetThroughputGbps;
     private final AtomicBoolean closed = new AtomicBoolean(false);
 
     private S3ClientProvider(
             S3Client s3Client,
+            S3AsyncClient asyncClient,
             S3TransferManager transferManager,
             S3EncryptionConfig encryptionConfig,
             AwsCredentialsProvider credentialsProvider,
@@ -123,8 +131,11 @@ class S3ClientProvider implements AutoCloseableAsync {
             @Nullable String assumeRoleArn,
             @Nullable String assumeRoleExternalId,
             @Nullable String assumeRoleSessionName,
-            int assumeRoleSessionDurationSeconds) {
+            int assumeRoleSessionDurationSeconds,
+            boolean useCrt,
+            @Nullable Double crtTargetThroughputGbps) {
         this.s3Client = Preconditions.checkNotNull(s3Client, "s3Client must not be null");
+        this.asyncClient = Preconditions.checkNotNull(asyncClient, "asyncClient must not be null");
         this.transferManager =
                 Preconditions.checkNotNull(transferManager, "transferManager must not be null");
         this.encryptionConfig =
@@ -161,6 +172,8 @@ class S3ClientProvider implements AutoCloseableAsync {
         this.assumeRoleExternalId = assumeRoleExternalId;
         this.assumeRoleSessionName = assumeRoleSessionName;
         this.assumeRoleSessionDurationSeconds = assumeRoleSessionDurationSeconds;
+        this.useCrt = useCrt;
+        this.crtTargetThroughputGbps = crtTargetThroughputGbps;
     }
 
     public S3Client getS3Client() {
@@ -283,6 +296,27 @@ class S3ClientProvider implements AutoCloseableAsync {
         return assumeRoleSessionDurationSeconds;
     }
 
+    @VisibleForTesting
+    boolean isUseCrt() {
+        return useCrt;
+    }
+
+    @VisibleForTesting
+    @Nullable
+    Double getCrtTargetThroughputGbps() {
+        return crtTargetThroughputGbps;
+    }
+
+    /**
+     * Exposed for tests to verify which async-client implementation (CRT vs Netty) was actually
+     * constructed. Not intended for production use; callers should go through {@link
+     * #getTransferManager()}.
+     */
+    @VisibleForTesting
+    S3AsyncClient getAsyncClient() {
+        return asyncClient;
+    }
+
     @Override
     public CompletableFuture<Void> closeAsync() {
         if (!closed.compareAndSet(false, true)) {
@@ -294,6 +328,11 @@ class S3ClientProvider implements AutoCloseableAsync {
                                 transferManager.close();
                             } catch (Exception e) {
                                 LOG.warn("Error closing S3 TransferManager", e);
+                            }
+                            try {
+                                asyncClient.close();
+                            } catch (Exception e) {
+                                LOG.warn("Error closing S3 async client", e);
                             }
                             try {
                                 s3Client.close();
@@ -338,32 +377,49 @@ class S3ClientProvider implements AutoCloseableAsync {
         private String secretKey;
         private String region;
         private String endpoint;
-        private boolean pathStyleAccess = false;
-        private boolean chunkedEncoding = true;
-        private boolean checksumValidation = true;
-        private int maxConnections = 50;
-        private Duration connectionTimeout = Duration.ofSeconds(60);
-        private Duration socketTimeout = Duration.ofSeconds(60);
-        private Duration connectionMaxIdleTime = Duration.ofSeconds(60);
-        private int maxRetries = 3;
+        // All defaults are sourced from NativeS3FileSystemFactory ConfigOption.defaultValue() so
+        // that NativeS3FileSystemFactory remains the single source of truth — if a default changes
+        // there, this Builder automatically picks it up without needing a parallel edit.
+        private boolean pathStyleAccess =
+                NativeS3FileSystemFactory.PATH_STYLE_ACCESS.defaultValue();
+        private boolean chunkedEncoding =
+                NativeS3FileSystemFactory.CHUNKED_ENCODING_ENABLED.defaultValue();
+        private boolean checksumValidation =
+                NativeS3FileSystemFactory.CHECKSUM_VALIDATION_ENABLED.defaultValue();
+        private int maxConnections = NativeS3FileSystemFactory.MAX_CONNECTIONS.defaultValue();
+        private Duration connectionTimeout =
+                NativeS3FileSystemFactory.CONNECTION_TIMEOUT.defaultValue();
+        private Duration socketTimeout = NativeS3FileSystemFactory.SOCKET_TIMEOUT.defaultValue();
+        private Duration connectionMaxIdleTime =
+                NativeS3FileSystemFactory.CONNECTION_MAX_IDLE_TIME.defaultValue();
+        private int maxRetries = NativeS3FileSystemFactory.MAX_RETRIES.defaultValue();
         private Duration retryBaseDelay = NativeS3FileSystemFactory.RETRY_BASE_DELAY.defaultValue();
         private Duration retryThrottleBaseDelay =
                 NativeS3FileSystemFactory.RETRY_THROTTLE_BASE_DELAY.defaultValue();
         private Duration retryMaxBackoff =
                 NativeS3FileSystemFactory.RETRY_MAX_BACKOFF.defaultValue();
-        private Duration clientCloseTimeout = Duration.ofSeconds(30);
+        private Duration clientCloseTimeout =
+                NativeS3FileSystemFactory.CLIENT_CLOSE_TIMEOUT.defaultValue();
 
         // AssumeRole configuration
         private String assumeRoleArn;
         private String assumeRoleExternalId;
-        private String assumeRoleSessionName = "flink-s3-session";
-        private int assumeRoleSessionDurationSeconds = 3600;
+        private String assumeRoleSessionName =
+                NativeS3FileSystemFactory.ASSUME_ROLE_SESSION_NAME.defaultValue();
+        private int assumeRoleSessionDurationSeconds =
+                NativeS3FileSystemFactory.ASSUME_ROLE_SESSION_DURATION_SECONDS.defaultValue();
 
         // Encryption configuration
         private S3EncryptionConfig encryptionConfig = S3EncryptionConfig.none();
 
         // Custom credentials provider class names (comma-separated)
         @Nullable private String credentialsProviderClasses;
+
+        // CRT configuration
+        private boolean useCrt = NativeS3FileSystemFactory.CRT_ENABLED.defaultValue();
+        @Nullable private Double crtTargetThroughputGbps = null;
+        private long crtMinPartSizeInBytes =
+                NativeS3FileSystemFactory.PART_UPLOAD_MIN_SIZE.defaultValue();
 
         public Builder accessKey(@Nullable String accessKey) {
             this.accessKey = accessKey;
@@ -498,6 +554,21 @@ class S3ClientProvider implements AutoCloseableAsync {
             return this;
         }
 
+        public Builder useCrt(boolean useCrt) {
+            this.useCrt = useCrt;
+            return this;
+        }
+
+        public Builder crtTargetThroughputGbps(@Nullable Double crtTargetThroughputGbps) {
+            this.crtTargetThroughputGbps = crtTargetThroughputGbps;
+            return this;
+        }
+
+        public Builder crtMinPartSizeInBytes(long crtMinPartSizeInBytes) {
+            this.crtMinPartSizeInBytes = crtMinPartSizeInBytes;
+            return this;
+        }
+
         S3ClientProvider build() {
             if (endpoint == null) {
                 endpoint = System.getProperty("s3.endpoint");
@@ -554,46 +625,27 @@ class S3ClientProvider implements AutoCloseableAsync {
                                             .build())
                             .build();
 
-            ApacheHttpClient.Builder httpClientBuilder =
-                    ApacheHttpClient.builder()
-                            .maxConnections(maxConnections)
-                            .connectionTimeout(connectionTimeout)
-                            .socketTimeout(socketTimeout)
-                            .tcpKeepAlive(true)
-                            .connectionMaxIdleTime(connectionMaxIdleTime);
-
-            S3ClientBuilder clientBuilder =
-                    S3Client.builder()
-                            .credentialsProvider(credentialsProvider)
-                            .region(awsRegion)
-                            .serviceConfiguration(s3Config)
-                            .httpClientBuilder(httpClientBuilder)
-                            .overrideConfiguration(overrideConfig);
-            if (endpointUri != null) {
-                clientBuilder.endpointOverride(endpointUri);
+            if (useCrt) {
+                LOG.info(
+                        "AWS CRT transport enabled (s3.crt.enabled=true) with target throughput {}",
+                        crtTargetThroughputGbps != null
+                                ? crtTargetThroughputGbps + " Gbps"
+                                : "(CRT runtime default)");
             }
-            S3Client s3Client = clientBuilder.build();
 
-            S3AsyncClientBuilder asyncClientBuilder =
-                    S3AsyncClient.builder()
-                            .credentialsProvider(credentialsProvider)
-                            .region(awsRegion)
-                            .serviceConfiguration(s3Config)
-                            .httpClientBuilder(
-                                    NettyNioAsyncHttpClient.builder()
-                                            .maxConcurrency(maxConnections)
-                                            .connectionTimeout(connectionTimeout)
-                                            .readTimeout(socketTimeout)
-                                            .connectionAcquisitionTimeout(connectionTimeout))
-                            .overrideConfiguration(overrideConfig);
-            if (endpointUri != null) {
-                asyncClientBuilder.endpointOverride(endpointUri);
-            }
+            S3Client s3Client =
+                    buildSyncClient(
+                            credentialsProvider, awsRegion, s3Config, overrideConfig, endpointUri);
+            S3AsyncClient asyncClient =
+                    buildAsyncClient(
+                            credentialsProvider, awsRegion, s3Config, overrideConfig, endpointUri);
+
             S3TransferManager transferManager =
-                    S3TransferManager.builder().s3Client(asyncClientBuilder.build()).build();
+                    S3TransferManager.builder().s3Client(asyncClient).build();
 
             return new S3ClientProvider(
                     s3Client,
+                    asyncClient,
                     transferManager,
                     encryptionConfig,
                     credentialsProvider,
@@ -615,7 +667,128 @@ class S3ClientProvider implements AutoCloseableAsync {
                     assumeRoleArn,
                     assumeRoleExternalId,
                     assumeRoleSessionName,
-                    assumeRoleSessionDurationSeconds);
+                    assumeRoleSessionDurationSeconds,
+                    useCrt,
+                    crtTargetThroughputGbps);
+        }
+
+        /**
+         * Builds the synchronous {@link S3Client}, choosing between the Apache HTTP transport and
+         * the AWS CRT transport based on {@link #useCrt}.
+         */
+        private S3Client buildSyncClient(
+                AwsCredentialsProvider credentialsProvider,
+                Region awsRegion,
+                S3Configuration s3Config,
+                ClientOverrideConfiguration overrideConfig,
+                @Nullable URI endpointUri) {
+            S3ClientBuilder clientBuilder =
+                    S3Client.builder()
+                            .credentialsProvider(credentialsProvider)
+                            .region(awsRegion)
+                            .serviceConfiguration(s3Config)
+                            .overrideConfiguration(overrideConfig);
+
+            if (useCrt) {
+                try {
+                    // Note: AwsCrtHttpClient.Builder does not expose a `readTimeout(Duration)`
+                    // equivalent of the Apache client's socket timeout — the CRT runtime relies
+                    // on `ConnectionHealthConfiguration` for stalled-read detection instead, so
+                    // the `s3.socket.timeout` setting is silently ignored in CRT mode.
+                    clientBuilder.httpClientBuilder(
+                            AwsCrtHttpClient.builder()
+                                    .maxConcurrency(maxConnections)
+                                    .connectionTimeout(connectionTimeout)
+                                    .connectionMaxIdleTime(connectionMaxIdleTime));
+                } catch (NoClassDefFoundError e) {
+                    throw new IllegalStateException(crtMissingJarsMessage(), e);
+                }
+            } else {
+                clientBuilder.httpClientBuilder(
+                        ApacheHttpClient.builder()
+                                .maxConnections(maxConnections)
+                                .connectionTimeout(connectionTimeout)
+                                .socketTimeout(socketTimeout)
+                                .tcpKeepAlive(true)
+                                .connectionMaxIdleTime(connectionMaxIdleTime));
+            }
+            if (endpointUri != null) {
+                clientBuilder.endpointOverride(endpointUri);
+            }
+            return clientBuilder.build();
+        }
+
+        /**
+         * Builds the asynchronous {@link S3AsyncClient}, choosing between the Netty transport and
+         * the AWS CRT transport based on {@link #useCrt}.
+         *
+         * <p>Note: when CRT is enabled the {@code s3.chunked-encoding.enabled} option is silently
+         * ignored. The CRT runtime manages wire encoding internally and {@link
+         * software.amazon.awssdk.services.s3.S3CrtAsyncClientBuilder} exposes no equivalent setter.
+         */
+        private S3AsyncClient buildAsyncClient(
+                AwsCredentialsProvider credentialsProvider,
+                Region awsRegion,
+                S3Configuration s3Config,
+                ClientOverrideConfiguration overrideConfig,
+                @Nullable URI endpointUri) {
+            if (useCrt) {
+                try {
+                    S3CrtAsyncClientBuilder crtAsyncBuilder =
+                            S3AsyncClient.crtBuilder()
+                                    .credentialsProvider(credentialsProvider)
+                                    .region(awsRegion)
+                                    .forcePathStyle(pathStyleAccess)
+                                    .checksumValidationEnabled(checksumValidation)
+                                    .httpConfiguration(
+                                            S3CrtHttpConfiguration.builder()
+                                                    .connectionTimeout(connectionTimeout)
+                                                    .build())
+                                    .retryConfiguration(
+                                            S3CrtRetryConfiguration.builder()
+                                                    .numRetries(maxRetries)
+                                                    .build())
+                                    .maxConcurrency(maxConnections)
+                                    .minimumPartSizeInBytes(crtMinPartSizeInBytes);
+                    // Only override the CRT runtime's own default when the user has explicitly
+                    // configured s3.crt.target-throughput-gbps; otherwise let the SDK pick.
+                    if (crtTargetThroughputGbps != null) {
+                        crtAsyncBuilder.targetThroughputInGbps(crtTargetThroughputGbps);
+                    }
+                    if (endpointUri != null) {
+                        crtAsyncBuilder.endpointOverride(endpointUri);
+                    }
+                    return crtAsyncBuilder.build();
+                } catch (NoClassDefFoundError e) {
+                    throw new IllegalStateException(crtMissingJarsMessage(), e);
+                }
+            }
+
+            S3AsyncClientBuilder asyncBuilder =
+                    S3AsyncClient.builder()
+                            .credentialsProvider(credentialsProvider)
+                            .region(awsRegion)
+                            .serviceConfiguration(s3Config)
+                            .httpClientBuilder(
+                                    NettyNioAsyncHttpClient.builder()
+                                            .maxConcurrency(maxConnections)
+                                            .connectionTimeout(connectionTimeout)
+                                            .readTimeout(socketTimeout)
+                                            .connectionAcquisitionTimeout(connectionTimeout))
+                            .overrideConfiguration(overrideConfig);
+            if (endpointUri != null) {
+                asyncBuilder.endpointOverride(endpointUri);
+            }
+            return asyncBuilder.build();
+        }
+
+        @VisibleForTesting
+        static String crtMissingJarsMessage() {
+            return "CRT transport requested (s3.crt.enabled=true) but the aws-crt JAR "
+                    + "is not on the classpath. Place it in the Flink plugin directory "
+                    + "(e.g. $FLINK_HOME/plugins/s3-fs-native/) alongside flink-s3-fs-native.jar. "
+                    + "Run tools/download-crt-jars.sh to download the matching version. "
+                    + "See the module README for setup details.";
         }
 
         private AwsCredentialsProvider buildBaseCredentialsProvider() {

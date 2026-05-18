@@ -164,6 +164,22 @@ class NativeS3FileSystemFactoryTest {
                 .hasMessageContaining("must be a positive integer");
     }
 
+    @Test
+    void testNonPositiveCrtTargetThroughputThrowsException() {
+        Configuration config = baseConfig();
+        config.set(NativeS3FileSystemFactory.CRT_TARGET_THROUGHPUT_GBPS, 0.0);
+        assertThatThrownBy(() -> createFs(config))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("s3.crt.target-throughput-gbps")
+                .hasMessageContaining("must be positive");
+
+        config.set(NativeS3FileSystemFactory.CRT_TARGET_THROUGHPUT_GBPS, -1.0);
+        assertThatThrownBy(() -> createFs(config))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessageContaining("s3.crt.target-throughput-gbps")
+                .hasMessageContaining("must be positive");
+    }
+
     // --- Max retries ---
 
     @Test

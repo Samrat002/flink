@@ -354,6 +354,79 @@ When enabled, file uploads automatically use TransferManager for:
 - Better utilization of available bandwidth
 - Lower heap requirements for write operations
 
+## AWS Common Runtime (CRT) Support
+
+The filesystem optionally supports the [AWS Common Runtime (CRT)](https://github.com/awslabs/aws-crt-java) HTTP transport
+for higher throughput on large S3 workloads.
+
+When enabled, the CRT transport replaces:
+- **Sync client**: Apache HTTP Client → `AwsCrtHttpClient`
+- **Async client**: Netty NIO → `S3AsyncClient.crtBuilder()` (with built-in multipart acceleration)
+
+### Prerequisites
+
+The `aws-crt` artifact contains JNI-linked native libraries whose C-side `FindClass` paths are
+hardcoded, making Maven shade relocation incompatible. Therefore **CRT JARs are not bundled** in
+the fat JAR and must be placed manually.
+
+### Setup
+
+1. From the module directory, run the helper script to download the `aws-crt`
+   JAR (auto-resolves the compatible version for the AWS SDK version this
+   module was built against):
+
+   ```bash
+   ./tools/download-crt-jars.sh
+   ```
+
+   This places the JAR in `./crt-jars/`. Pass a different directory as the
+   first argument if needed. Requires `mvn` on `PATH`.
+
+2. Copy the JAR into the Flink plugin directory alongside `flink-s3-fs-native.jar`:
+
+   ```bash
+   cp crt-jars/aws-crt-*.jar $FLINK_HOME/plugins/s3-fs-native/
+   ```
+
+   > **Note:** `aws-crt-client` does **not** need to be downloaded or placed
+   > separately — it is bundled (shaded) directly inside `flink-s3-fs-native.jar`
+   > at build time. Only `aws-crt` (the JNI native lib) must be placed manually
+   > because its C-side `FindClass` paths are hardcoded and incompatible with
+   > Maven shade relocation.
+
+3. Enable CRT in your Flink configuration (`conf/config.yaml`):
+
+   ```yaml
+   s3.crt.enabled: true
+   ```
+
+If the `aws-crt` JAR is missing when `s3.crt.enabled: true`, the filesystem
+fails fast at startup with an `IllegalStateException` pointing back to this
+setup procedure.
+
+#### Manual download (alternative)
+
+If `mvn` is unavailable, fetch the JAR by hand from Maven Central:
+
+`aws-crt-<version>.jar` (groupId: `software.amazon.awssdk.crt`) — the version is
+declared as the `<dependency>` on `software.amazon.awssdk.crt:aws-crt` inside
+`aws-crt-client-<version>.pom` on Maven Central. The `aws-crt` artifact uses an
+independent versioning scheme (e.g. `0.45.x`) that does **not** track the AWS SDK
+version.
+
+`aws-crt-client` does **not** need to be downloaded — it is bundled inside the fat JAR.
+
+### CRT Configuration Options
+
+| Key | Default | Description |
+|-----|---------|-------------|
+| s3.crt.enabled | false | Enable CRT HTTP transport for both sync and async S3 clients |
+| s3.crt.target-throughput-gbps | (none) | Soft target throughput in Gbps for the CRT async client. Hint, not a hard cap — actual throughput may exceed the configured value. When unset, the AWS CRT runtime applies its own internal default; set this only to override it (e.g. to match the network bandwidth available to a single TaskManager). |
+
+> **Note on options silently ignored under CRT:**
+> - `s3.socket.timeout` — `AwsCrtHttpClient` has no socket-level read timeout; the CRT runtime uses `ConnectionHealthConfiguration` for stalled-read detection instead.
+> - `s3.chunked-encoding.enabled` — `S3CrtAsyncClientBuilder` manages wire encoding internally and exposes no equivalent setter.
+
 ## Checkpointing
 
 Configure checkpoint storage in `conf/config.yaml`:

@@ -321,6 +321,33 @@ public class NativeS3FileSystemFactory implements FileSystemFactory {
                                     + "When not set, the default chain is used: delegation tokens -> "
                                     + "static credentials (if configured) -> DefaultCredentialsProvider.");
 
+    public static final ConfigOption<Boolean> CRT_ENABLED =
+            ConfigOptions.key("s3.crt.enabled")
+                    .booleanType()
+                    .defaultValue(false)
+                    .withDescription(
+                            "Enable AWS Common Runtime (CRT) HTTP transport. "
+                                    + "When true, uses AwsCrtHttpClient for sync S3 operations and "
+                                    + "S3AsyncClient.crtBuilder() for async/transfer operations, "
+                                    + "providing higher throughput for large S3 transfers. "
+                                    + "Requires aws-crt-client and aws-crt JARs in the plugin directory "
+                                    + "(they are not bundled in the fat JAR due to JNI shading constraints).");
+
+    public static final ConfigOption<Double> CRT_TARGET_THROUGHPUT_GBPS =
+            ConfigOptions.key("s3.crt.target-throughput-gbps")
+                    .doubleType()
+                    .noDefaultValue()
+                    .withDescription(
+                            "Soft target throughput in Gbps for the CRT-based S3 async client. "
+                                    + "Only used when s3.crt.enabled is true. "
+                                    + "This is a hint to the CRT runtime, not a hard cap: actual throughput "
+                                    + "may exceed this value, and the runtime uses it to size its internal "
+                                    + "worker pool and tune parallelism, so there is no separate Flink-level "
+                                    + "knob for concurrent CRT transfer threads. "
+                                    + "When unset, the AWS CRT runtime applies its own internal default."
+                                    + "Set this only when you want to override that — e.g. pick a value "
+                                    + "matching the network bandwidth available to a single TaskManager.");
+
     @Nullable private Configuration flinkConfig;
     @Nullable private BucketConfigProvider bucketConfigProvider;
 
@@ -462,6 +489,18 @@ public class NativeS3FileSystemFactory implements FileSystemFactory {
                 MAX_CONNECTIONS.key(),
                 maxConnections);
 
+        // Optional: only validate when the user explicitly sets a value. If unset, the CRT runtime
+        // applies its own default (no Flink-level opinionated default).
+        final Double crtTargetThroughputGbps =
+                config.getOptional(CRT_TARGET_THROUGHPUT_GBPS).orElse(null);
+        if (crtTargetThroughputGbps != null) {
+            Preconditions.checkArgument(
+                    crtTargetThroughputGbps > 0,
+                    "'%s' must be positive, but was %s",
+                    CRT_TARGET_THROUGHPUT_GBPS.key(),
+                    crtTargetThroughputGbps);
+        }
+
         S3ClientProvider clientProvider =
                 S3ClientProvider.builder()
                         .accessKey(accessKey)
@@ -486,6 +525,9 @@ public class NativeS3FileSystemFactory implements FileSystemFactory {
                         .retryMaxBackoff(config.get(RETRY_MAX_BACKOFF))
                         .credentialsProviderClasses(credentialsProviderClasses)
                         .encryptionConfig(encryptionConfig)
+                        .useCrt(config.get(CRT_ENABLED))
+                        .crtTargetThroughputGbps(crtTargetThroughputGbps)
+                        .crtMinPartSizeInBytes(config.get(PART_UPLOAD_MIN_SIZE))
                         .build();
 
         NativeS3BulkCopyHelper bulkCopyHelper = null;
