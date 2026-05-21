@@ -409,12 +409,16 @@ class DefaultStateTransitionManagerTest {
                 ctx.createTestInstanceThatPassedCooldownPhase();
 
         assertThat(testInstance.getPhase()).isInstanceOf(Idling.class);
-        ctx.clearActiveCheckpointTriggerCount();
+        assertThat(ctx.getActiveCheckpointTriggerCount())
+                .as("Neither Cooldown nor Idling should fire the active trigger")
+                .isZero();
 
         testInstance.onChange(true);
 
         assertThat(testInstance.getPhase()).isInstanceOf(Stabilizing.class);
-        assertThat(ctx.getActiveCheckpointTriggerCount()).isGreaterThanOrEqualTo(1);
+        assertThat(ctx.getActiveCheckpointTriggerCount())
+                .as("Entering Stabilizing must fire the active trigger exactly once")
+                .isEqualTo(1);
     }
 
     @Test
@@ -427,12 +431,14 @@ class DefaultStateTransitionManagerTest {
 
         testInstance.onChange(true);
         assertThat(testInstance.getPhase()).isInstanceOf(Stabilizing.class);
-        ctx.clearActiveCheckpointTriggerCount();
 
         testInstance.onChange(true);
 
         assertThat(testInstance.getPhase()).isInstanceOf(Stabilizing.class);
-        assertThat(ctx.getActiveCheckpointTriggerCount()).isGreaterThanOrEqualTo(1);
+        assertThat(ctx.getActiveCheckpointTriggerCount())
+                .as(
+                        "Two onChange calls. One entering Stabilizing, one onChange while in Stabilizing — must fire the trigger twice")
+                .isEqualTo(2);
     }
 
     @Test
@@ -445,12 +451,13 @@ class DefaultStateTransitionManagerTest {
 
         testInstance.onChange(true);
         assertThat(testInstance.getPhase()).isInstanceOf(Stabilizing.class);
-        ctx.clearActiveCheckpointTriggerCount();
 
         ctx.passResourceStabilizationTimeout();
 
         assertThat(testInstance.getPhase()).isInstanceOf(Stabilized.class);
-        assertThat(ctx.getActiveCheckpointTriggerCount()).isGreaterThanOrEqualTo(1);
+        assertThat(ctx.getActiveCheckpointTriggerCount())
+                .as("Entering Stabilizing then Stabilized must fire the trigger twice in total")
+                .isEqualTo(2);
     }
 
     private static void changeWithoutPhaseMove(
@@ -765,10 +772,6 @@ class DefaultStateTransitionManagerTest {
 
         public int getActiveCheckpointTriggerCount() {
             return activeCheckpointTriggerCount;
-        }
-
-        public void clearActiveCheckpointTriggerCount() {
-            activeCheckpointTriggerCount = 0;
         }
     }
 }

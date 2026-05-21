@@ -2001,12 +2001,16 @@ public class CheckpointCoordinator {
     }
 
     /**
-     * Returns {@link Optional#empty()} if a checkpoint is already in flight (triggering or
-     * pending). Otherwise returns the remaining {@link Duration} until {@code
-     * minPauseBetweenCheckpoints} is satisfied; {@link Duration#ZERO} means the trigger can fire
-     * immediately. When {@code lastCheckpointCompletionRelativeTime} is {@code 0} (no checkpoint
-     * has completed yet), the full min-pause is treated as already elapsed and {@link
-     * Duration#ZERO} is returned. All checks are made under the coordinator lock.
+     * Returns the remaining {@link Duration} until {@code minPauseBetweenCheckpoints} is satisfied
+     * for a new active-trigger checkpoint, computed from the time elapsed since the last completed
+     * checkpoint (or from the coordinator clock's epoch when no checkpoint has completed yet —
+     * which is normally far in the past in production). {@link Duration#ZERO} means the trigger can
+     * fire immediately.
+     *
+     * <p>Returns {@link Optional#empty()} as a fallback if a checkpoint is already in flight
+     * (triggering or pending), in which case no active trigger should be scheduled.
+     *
+     * <p>All checks are made under the coordinator lock.
      */
     public Optional<Duration> getActiveCheckpointTriggerDelay() {
         synchronized (lock) {

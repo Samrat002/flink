@@ -664,6 +664,8 @@ class ExecutingTest {
     @Test
     void testActiveCheckpointTriggerSkipsWhenNoCoordinator() throws Exception {
         try (MockExecutingContext ctx = new MockExecutingContext()) {
+            MockExecutionJobVertex mejv = new MockExecutionJobVertex(MockExecutionVertex::new);
+
             StateTrackingMockExecutionGraph graph =
                     new StateTrackingMockExecutionGraph() {
                         @Nullable
@@ -671,7 +673,22 @@ class ExecutingTest {
                         public CheckpointCoordinator getCheckpointCoordinator() {
                             return null;
                         }
+
+                        @Override
+                        public Iterable<ExecutionJobVertex> getVerticesTopologically() {
+                            return Collections.singletonList(mejv);
+                        }
                     };
+            // Set parallelism change so the only blocking guard is the null coordinator check;
+            // if the null check is ever removed from requestActiveCheckpointTrigger this test
+            // will NPE on `cc.isPeriodicCheckpointingConfigured()` and fail loudly.
+            ctx.setVertexParallelism(
+                    new VertexParallelism(
+                            graph.getAllVertices().values().stream()
+                                    .collect(
+                                            Collectors.toMap(
+                                                    AccessExecutionJobVertex::getJobVertexId,
+                                                    v -> v.getParallelism() + 1))));
 
             Executing exec =
                     new ExecutingStateBuilder()
@@ -717,7 +734,9 @@ class ExecutingTest {
                             return Collections.singletonList(mejv);
                         }
                     };
-            // Set up parallelism change so the only blocking guard is periodic checkpointing
+            // Set parallelism change so the only blocking guard is periodic-checkpointing-not-
+            // configured. If the periodic check is removed, the request will schedule a retry —
+            // which the assertion below catches.
             ctx.setVertexParallelism(
                     new VertexParallelism(
                             graph.getAllVertices().values().stream()
@@ -733,7 +752,14 @@ class ExecutingTest {
                             .build(ctx);
 
             assertThat(coordinator.isPeriodicCheckpointingConfigured()).isFalse();
+            ManuallyTriggeredComponentMainThreadExecutor ctxExecutor =
+                    (ManuallyTriggeredComponentMainThreadExecutor) ctx.getMainThreadExecutor();
+            int baseline = ctxExecutor.getActiveNonPeriodicScheduledTask().size();
             exec.requestActiveCheckpointTrigger();
+            assertThat(ctxExecutor.getActiveNonPeriodicScheduledTask())
+                    .as(
+                            "No retry should be scheduled when periodic checkpointing is not configured")
+                    .hasSize(baseline);
             checkpointTimer.triggerAll();
             assertThat(coordinator.getNumberOfPendingCheckpoints())
                     .as(
@@ -766,6 +792,8 @@ class ExecutingTest {
                             return Collections.singletonList(mejv);
                         }
                     };
+            // Parallelism is intentionally UNCHANGED — the parallelism guard in
+            // tryFireActiveCheckpointAfterRetry must drop the trigger before it fires.
             ctx.setVertexParallelism(
                     new VertexParallelism(
                             graph.getAllVertices().values().stream()
@@ -779,7 +807,13 @@ class ExecutingTest {
                             .setExecutionGraph(graph)
                             .setActiveCheckpointTriggerEnabled(true)
                             .build(ctx);
+            ManuallyTriggeredComponentMainThreadExecutor ctxExecutor =
+                    (ManuallyTriggeredComponentMainThreadExecutor) ctx.getMainThreadExecutor();
             exec.requestActiveCheckpointTrigger();
+            // The request path schedules a retry (parallelism check lives in the retry, not in
+            // the request). Run the scheduled retry to exercise the parallelism check; without
+            // this drain the test would pass for the wrong reason (retry never ran).
+            ctxExecutor.triggerNonPeriodicScheduledTasks();
             checkpointTimer.triggerAll();
             assertThat(coordinator.getNumberOfPendingCheckpoints())
                     .as("No checkpoint should be triggered when parallelism is unchanged")
@@ -812,6 +846,8 @@ class ExecutingTest {
                         }
                     };
 
+            // Parallelism +1 and periodic configured so the only blocker is the in-progress
+            // check at request time.
             ctx.setVertexParallelism(
                     new VertexParallelism(
                             graph.getAllVertices().values().stream()
@@ -830,7 +866,18 @@ class ExecutingTest {
 
             int pendingBefore = coordinator.getNumberOfPendingCheckpoints();
             assertThat(pendingBefore).isGreaterThan(0);
+
+            ManuallyTriggeredComponentMainThreadExecutor ctxExecutor =
+                    (ManuallyTriggeredComponentMainThreadExecutor) ctx.getMainThreadExecutor();
+            int scheduledBefore = ctxExecutor.getActiveNonPeriodicScheduledTask().size();
             exec.requestActiveCheckpointTrigger();
+            // The in-progress check runs in the request path and must short-circuit before
+            // scheduling a retry — otherwise the test passes for the wrong reason (retry would
+            // also see in-progress and drop).
+            assertThat(ctxExecutor.getActiveNonPeriodicScheduledTask())
+                    .as(
+                            "No retry should be scheduled when a checkpoint is already in progress at request time")
+                    .hasSize(scheduledBefore);
             checkpointTimer.triggerAll();
             assertThat(coordinator.getNumberOfPendingCheckpoints())
                     .as(

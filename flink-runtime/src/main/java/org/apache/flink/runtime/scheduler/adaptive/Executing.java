@@ -195,10 +195,13 @@ class Executing extends StateWithExecutionGraph
         if (!activeCheckpointTriggerEnabled) {
             return;
         }
-
         final CheckpointCoordinator checkpointCoordinator =
                 getExecutionGraph().getCheckpointCoordinator();
-        if (!shouldTriggerActiveCheckpoint(checkpointCoordinator)) {
+        if (checkpointCoordinator == null
+                || !checkpointCoordinator.isPeriodicCheckpointingConfigured()) {
+            getLogger()
+                    .debug(
+                            "Skipping active checkpoint trigger for rescale: checkpointing not configured.");
             return;
         }
 
@@ -211,24 +214,6 @@ class Executing extends StateWithExecutionGraph
             return;
         }
         scheduleActiveCheckpointTriggerRetry(triggerDelay.get());
-    }
-
-    private boolean shouldTriggerActiveCheckpoint(
-            @Nullable CheckpointCoordinator checkpointCoordinator) {
-        if (checkpointCoordinator == null
-                || !checkpointCoordinator.isPeriodicCheckpointingConfigured()) {
-            getLogger()
-                    .debug(
-                            "Skipping active checkpoint trigger for rescale: checkpointing not configured.");
-            return false;
-        }
-        if (!parallelismChanged()) {
-            getLogger()
-                    .debug(
-                            "Skipping active checkpoint trigger for rescale: parallelism unchanged.");
-            return false;
-        }
-        return true;
     }
 
     private void scheduleActiveCheckpointTriggerRetry(Duration delay) {
@@ -247,11 +232,21 @@ class Executing extends StateWithExecutionGraph
 
     private void tryFireActiveCheckpointAfterRetry() {
         activeCheckpointTriggerScheduled = false;
-        final CheckpointCoordinator checkpointCoordinator =
-                getExecutionGraph().getCheckpointCoordinator();
-        if (!shouldTriggerActiveCheckpoint(checkpointCoordinator)) {
+
+        // Parallelism is the only guard re-evaluated here: it can change between the request
+        // and the scheduled fire (e.g. resources changed again, or the parallelism was reverted
+        // back to the current value while we waited for min-pause). The null check and
+        // periodic-checkpoint config are invariants validated at request time.
+        if (!parallelismChanged()) {
+            getLogger()
+                    .debug("Active checkpoint trigger for rescale dropped: parallelism unchanged.");
             return;
         }
+        final CheckpointCoordinator checkpointCoordinator =
+                Preconditions.checkNotNull(
+                        getExecutionGraph().getCheckpointCoordinator(),
+                        "Checkpoint coordinator was non-null when the trigger was scheduled; "
+                                + "an Executing state never drops its coordinator.");
         final Optional<Duration> triggerDelay =
                 checkpointCoordinator.getActiveCheckpointTriggerDelay();
         if (triggerDelay.isEmpty()) {

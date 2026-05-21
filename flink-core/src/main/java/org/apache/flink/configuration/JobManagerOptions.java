@@ -759,7 +759,7 @@ public class JobManagerOptions {
                                             "When enabled, the Adaptive Scheduler actively triggers a checkpoint when resources change and rescaling is desired, "
                                                     + "rather than waiting for the next periodic checkpoint. "
                                                     + "This reduces rescaling latency, especially when checkpoint intervals are large. "
-                                                    + "The active trigger respects min-pause and "
+                                                    + "The active trigger respects the configured minimum pause between checkpoints and "
                                                     + "will not fire if a checkpoint is already in progress or being triggered.")
                                     .build());
 
