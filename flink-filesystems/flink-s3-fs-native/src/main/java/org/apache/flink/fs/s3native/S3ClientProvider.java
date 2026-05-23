@@ -700,7 +700,7 @@ class S3ClientProvider implements AutoCloseableAsync {
                                     .maxConcurrency(maxConnections)
                                     .connectionTimeout(connectionTimeout)
                                     .connectionMaxIdleTime(connectionMaxIdleTime));
-                } catch (NoClassDefFoundError e) {
+                } catch (NoClassDefFoundError | UnsatisfiedLinkError e) {
                     throw new IllegalStateException(crtMissingJarsMessage(), e);
                 }
             } else {
@@ -759,7 +759,7 @@ class S3ClientProvider implements AutoCloseableAsync {
                         crtAsyncBuilder.endpointOverride(endpointUri);
                     }
                     return crtAsyncBuilder.build();
-                } catch (NoClassDefFoundError e) {
+                } catch (NoClassDefFoundError | UnsatisfiedLinkError e) {
                     throw new IllegalStateException(crtMissingJarsMessage(), e);
                 }
             }

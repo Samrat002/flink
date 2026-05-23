@@ -32,6 +32,10 @@ under the License.
 
 	<properties>
 		<fs.s3.aws.sdk.version>2.44.4</fs.s3.aws.sdk.version>
+		<!-- aws-crt uses a separate versioning scheme from the AWS SDK; this version was
+		     validated against aws-crt-client ${fs.s3.aws.sdk.version}. Update when bumping
+		     the SDK version (check aws-crt-client-<version>.pom → awscrt.version). -->
+		<fs.s3.aws.crt.version>0.45.1</fs.s3.aws.crt.version>
 		<japicmp.skip>true</japicmp.skip>
 		<surefire.module.config>--add-opens=java.base/java.util=ALL-UNNAMED</surefire.module.config>
 	</properties>
@@ -149,6 +153,15 @@ under the License.
 		<dependency>
 			<groupId>org.testcontainers</groupId>
 			<artifactId>junit-jupiter</artifactId>
+			<scope>test</scope>
+		</dependency>
+
+		<!-- aws-crt is excluded from production fat-JAR (JNI shading incompatibility) but
+		     must be on the test classpath for CRT-enabled unit tests to instantiate clients. -->
+		<dependency>
+			<groupId>software.amazon.awssdk.crt</groupId>
+			<artifactId>aws-crt</artifactId>
+			<version>${fs.s3.aws.crt.version}</version>
 			<scope>test</scope>
 		</dependency>
 	</dependencies>

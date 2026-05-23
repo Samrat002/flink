@@ -294,19 +294,11 @@ class S3ClientProviderTest {
 
         assertThat(provider.isUseCrt()).isTrue();
         assertThat(provider.getCrtTargetThroughputGbps()).isEqualTo(20.0);
-        // Verify the if (useCrt) branch was actually taken — the async client must be a
-        // CRT-backed implementation, not the default Netty-backed one. Class name check is more
-        // stable than reflecting into SDK-internal fields and surfaces SDK-version drift via test
-        // failures (which is desirable).
         assertThat(provider.getAsyncClient().getClass().getName()).contains("Crt");
     }
 
     @Test
     void testCrtEnabledWithoutThroughputOverrideStillBuildsCrtClient() {
-        // CRT must work without a Flink-level throughput override: when
-        // s3.crt.target-throughput-gbps is unset the AWS CRT runtime applies its own internal
-        // default. This guards against a regression where unsetting the option would skip
-        // construction or pick the wrong builder branch.
         S3ClientProvider provider =
                 S3ClientProvider.builder()
                         .endpoint(DUMMY_ENDPOINT)
@@ -332,7 +324,6 @@ class S3ClientProviderTest {
         assertThat(msg).contains("aws-crt");
         assertThat(msg).contains("plugin");
         assertThat(msg).contains("README");
-    }
     }
 
     @SuppressWarnings("unchecked")
