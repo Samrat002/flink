@@ -250,19 +250,34 @@ class NativeS3RecoverableFsDataOutputStream extends RecoverableFsDataOutputStrea
             }
 
             closed = true;
-            currentOutputStream.close();
+            try {
+                currentOutputStream.close();
 
-            if (currentPartSize > 0) {
-                uploadCurrentPart();
-            } else {
-                Files.delete(currentTempFile.toPath());
+                if (currentPartSize > 0) {
+                    uploadCurrentPart();
+                } else {
+                    Files.delete(currentTempFile.toPath());
+                }
+
+                return new NativeS3Committer(
+                        s3AccessHelper,
+                        new NativeS3Recoverable(
+                                key, uploadId, new ArrayList<>(completedParts), numBytesInParts));
+            } catch (IOException | RuntimeException | Error ex) {
+                if (currentTempFile != null) {
+                    try {
+                        Files.deleteIfExists(currentTempFile.toPath());
+                    } catch (IOException e) {
+                        ex.addSuppressed(e);
+                    }
+                }
+                try {
+                    s3AccessHelper.abortMultiPartUpload(key, uploadId);
+                } catch (IOException e) {
+                    ex.addSuppressed(e);
+                }
+                throw ex;
             }
-
-            NativeS3Recoverable recoverable =
-                    new NativeS3Recoverable(
-                            key, uploadId, new ArrayList<>(completedParts), numBytesInParts);
-
-            return new NativeS3Committer(s3AccessHelper, recoverable);
         } finally {
             unlock();
         }

@@ -55,7 +55,7 @@ import java.util.concurrent.atomic.AtomicInteger;
  * <p><b>Thread safety:</b> not thread-safe. Use a single thread per instance, matching the
  * single-thread invariant of the production {@link NativeS3RecoverableFsDataOutputStream}.
  */
-public final class InMemoryNativeS3Operations extends NativeS3ObjectOperations {
+public class InMemoryNativeS3Operations extends NativeS3ObjectOperations {
 
     public static final String DEFAULT_BUCKET = "test-bucket";
 

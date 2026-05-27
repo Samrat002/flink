@@ -26,6 +26,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.ByteArrayOutputStream;
+import java.io.File;
 import java.io.IOException;
 import java.util.Arrays;
 
@@ -255,6 +256,48 @@ class NativeS3RecoverableWriterRecoveryTest {
         assertThat(w3.cleanupRecoverableState(r1)).isTrue();
         assertThat(w3.cleanupRecoverableState(r2)).isTrue();
         assertThat(s3.storedObjects).doesNotContainKeys(firstSideObject, secondSideObject);
+    }
+
+    @Test
+    void closeForCommitAbortsMultiPartUploadOnUploadFailure() throws Exception {
+        InMemoryNativeS3Operations s3 =
+                new InMemoryNativeS3Operations() {
+                    @Override
+                    public UploadPartResult uploadPart(
+                            String key, String uploadId, int partNumber, File file, long length)
+                            throws IOException {
+                        throw new IOException("simulated S3 outage on uploadPart");
+                    }
+                };
+
+        NativeS3RecoverableWriter writer =
+                NativeS3RecoverableWriter.writer(s3, tmp.toString(), MIN_PART_SIZE, 1);
+
+        RecoverableFsDataOutputStream out = writer.open(new Path("s3://" + BUCKET + "/" + KEY));
+        // 5 bytes < minPartSize ⇒ no upload triggered yet. Sits in the temp file as a tail
+        // that closeForCommit() will try to flush.
+        out.write(bytes('A', 5), 0, 5);
+
+        assertThat(s3.openMultipartUploads).as("sanity: MPU is open before commit").hasSize(1);
+        String uploadId = s3.openMultipartUploads.keySet().iterator().next();
+
+        // closeForCommit must surface the underlying S3 failure to the caller.
+        assertThatThrownBy(out::closeForCommit)
+                .isInstanceOf(IOException.class)
+                .hasMessageContaining("simulated");
+
+        out.close();
+
+        // no orphan MPU and no leaked temp file.
+        assertThat(s3.openMultipartUploads)
+                .as(
+                        "MPU must be aborted after closeForCommit() failed — either by "
+                                + "closeForCommit() itself or by the subsequent close()")
+                .doesNotContainKey(uploadId);
+
+        assertThat(countLocalFilesIn(tmp))
+                .as("local temp file must not be left behind after failed closeForCommit")
+                .isZero();
     }
 
     private static long countLocalFilesIn(java.nio.file.Path dir) throws IOException {
