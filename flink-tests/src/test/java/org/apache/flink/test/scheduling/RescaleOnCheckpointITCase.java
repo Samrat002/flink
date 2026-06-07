@@ -233,6 +233,50 @@ class RescaleOnCheckpointITCase {
     }
 
     @Test
+    void testNoRescaleWithActiveCheckpointTriggerDisabled(
+            @InjectMiniCluster MiniCluster miniCluster,
+            @InjectClusterClient RestClusterClient<?> restClusterClient)
+            throws Exception {
+        // Mirror of testRescaleWithActiveCheckpointTrigger with the feature flag turned off.
+        // Verifies that the positive test is only passing because of the active trigger: with
+        // a 24-hour checkpoint interval and no active trigger, the job must not rescale within
+        // the test timeout.
+        final Configuration config = new Configuration();
+        config.set(
+                JobManagerOptions.SCHEDULER_RESCALE_TRIGGER_ACTIVE_CHECKPOINT_ENABLED, false);
+
+        final StreamExecutionEnvironment env =
+                StreamExecutionEnvironment.getExecutionEnvironment(config);
+        env.setParallelism(BEFORE_RESCALE_PARALLELISM);
+        env.enableCheckpointing(Duration.ofHours(24).toMillis());
+        env.fromSequence(0, Integer.MAX_VALUE).sinkTo(new DiscardingSink<>());
+
+        final JobGraph jobGraph = env.getStreamGraph().getJobGraph();
+        final Iterator<JobVertex> jobVertexIterator = jobGraph.getVertices().iterator();
+        assertThat(jobVertexIterator.hasNext()).isTrue();
+        final JobVertexID jobVertexId = jobVertexIterator.next().getID();
+
+        final JobResourceRequirements jobResourceRequirements =
+                JobResourceRequirements.newBuilder()
+                        .setParallelismForJobVertex(jobVertexId, 1, AFTER_RESCALE_PARALLELISM)
+                        .build();
+
+        restClusterClient.submitJob(jobGraph).join();
+        final JobID jobId = jobGraph.getJobID();
+        try {
+            waitForRunningTasks(restClusterClient, jobId, BEFORE_RESCALE_PARALLELISM);
+            restClusterClient.updateJobResourceRequirements(jobId, jobResourceRequirements).join();
+            Thread.sleep(REQUIREMENT_UPDATE_TO_CHECKPOINT_GAP.toMillis());
+            waitForRunningTasks(restClusterClient, jobId, BEFORE_RESCALE_PARALLELISM);
+            LOG.info(
+                    "Verified: job {} did not rescale when active checkpoint trigger is disabled.",
+                    jobId);
+        } finally {
+            restClusterClient.cancel(jobGraph.getJobID()).join();
+        }
+    }
+
+    @Test
     void testNoRescaleWithoutCheckpointingConfigured(
             @InjectMiniCluster MiniCluster miniCluster,
             @InjectClusterClient RestClusterClient<?> restClusterClient)
